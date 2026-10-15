@@ -21,20 +21,34 @@ The API is available at `http://localhost:8000`, with OpenAPI docs at
 initializer applies the shared schema only for a new volume; existing databases
 receive the additive `app_user.name` column from the backend at startup.
 
-Users must already exist in `app_user` and have an account in the system that
-issues HS256 JWTs using `JWT_SECRET_KEY`. Tokens must contain the user's UUID in
-the `sub` claim and an `exp` claim. This backend verifies tokens but does not
-register users or issue tokens. Do not expose this signing secret to clients.
+Anyone can create an account with `POST /auth/register`; passwords are hashed
+with bcrypt (cost 12) and never stored or logged in plain text. Login responses
+are identical for unknown emails and wrong passwords, so they cannot be used to
+probe which addresses are registered. Existing `app_user` rows seeded by the
+data pipeline can log in only if their `password_hash` is a bcrypt hash; rows
+with placeholder hashes always fail authentication.
+
+The backend issues and verifies its own HS256 JWTs signed with `JWT_SECRET_KEY`.
+Tokens carry the user's UUID in the `sub` claim plus `iat`/`exp` and expire
+after `ACCESS_TOKEN_TTL_MINUTES` (default 24 hours). Do not expose this signing
+secret to clients.
 
 ## API
 
-All API routes are under `/api/v1` and require a valid bearer token. Trip reads,
-expense reads, and expense creation require active trip membership. Only the
-organizer can invite an existing user to the trip. The invitee accepts the
-pending invitation using their own token. Invitations are recorded in the
-database; no email delivery provider is configured. Only the authenticated
-payer can record an expense in their name.
+All API routes are under `/api/v1` and require a valid bearer token, except
+registration, login, and the health check. Trip reads, expense reads, and
+expense creation require active trip membership. Only the organizer can invite
+an existing user to the trip. The invitee accepts the pending invitation using
+their own token. Invitations are recorded in the database; no email delivery
+provider is configured. Only the authenticated payer can record an expense in
+their name.
 
+* `POST /auth/register`: Create a user (`email`, `name`, `password` of at
+  least 8 characters and at most 72 bytes) and return a bearer token. Duplicate
+  emails return 409; emails are stored lowercased.
+* `POST /auth/login`: Authenticate with `email` and `password`, returning a
+  bearer token. Wrong credentials return 401.
+* `GET /auth/me`: Return the authenticated user's profile.
 * `POST /trips`: Create a trip. `organizer_id` must match the JWT subject, and
   `city_id` must refer to an existing pipeline city.
 * `GET /trips/{trip_id}`: Read trip details and home-base coordinates.

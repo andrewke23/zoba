@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import jwt
@@ -12,6 +13,18 @@ from app.core.database import get_session
 from app.models.entities import User
 
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def create_access_token(user_id: UUID) -> str:
+    """Mint an HS256 bearer token the API will accept for this user."""
+    settings = get_settings()
+    issued_at = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user_id),
+        "iat": issued_at,
+        "exp": issued_at + timedelta(minutes=settings.access_token_ttl_minutes),
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm="HS256")
 
 
 async def get_current_user_id(
