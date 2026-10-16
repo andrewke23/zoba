@@ -1,3 +1,4 @@
+
 // Demo data for the mock API. Chicago is the placeholder seed city in
 // data-pipeline/pipeline/config.py; coordinates are approximate.
 import type { City, Destination, Expense, OpeningWindow, PackingItem, Trip, User } from '../types'
