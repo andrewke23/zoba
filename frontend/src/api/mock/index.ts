@@ -15,7 +15,7 @@ import type {
   ZobaApi,
 } from '../types'
 import { PREF_CONFIG, balances, computeRanking, nextPair, schedule, settle, tripDates } from './algorithms'
-import { db, newId, persist } from './db'
+import { db, newId, persist, refresh } from './db'
 import { SEED_DESTINATIONS } from './seed'
 
 /** SRS §8 leaves lock authority open; F12 says members may lock. Flip to restrict to organizers. */
@@ -26,6 +26,7 @@ const delay = (ms = 120 + Math.random() * 180) => new Promise((r) => setTimeout(
 
 async function respond<T>(fn: () => T): Promise<T> {
   await delay()
+  refresh()
   const out = fn()
   persist()
   return clone(out)

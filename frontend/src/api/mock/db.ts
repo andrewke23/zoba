@@ -99,24 +99,43 @@ function fresh(): MockState {
   }
 }
 
+// Shared data lives in localStorage (all tabs); the logged-in user lives in
+// sessionStorage (per tab), so two tabs can act as two different travelers.
+const SESSION_KEY = 'zoba-mock-session'
+
+function loadSession(): UUID | null {
+  try {
+    return sessionStorage.getItem(SESSION_KEY)
+  } catch {
+    return null
+  }
+}
+
 function load(): MockState {
   try {
     const raw = localStorage.getItem(KEY)
     if (raw) {
       const parsed = JSON.parse(raw) as MockState
-      if (parsed.version === VERSION) return parsed
+      if (parsed.version === VERSION) return { ...parsed, sessionUserId: loadSession() }
     }
   } catch {
     // storage unavailable or corrupt — fall through to seed data
   }
-  return fresh()
+  return { ...fresh(), sessionUserId: loadSession() }
 }
 
 export const db: MockState = load()
 
+/** Pick up writes made by other tabs before handling a request. */
+export function refresh() {
+  Object.assign(db, load())
+}
+
 export function persist() {
   try {
-    localStorage.setItem(KEY, JSON.stringify(db))
+    localStorage.setItem(KEY, JSON.stringify({ ...db, sessionUserId: null }))
+    if (db.sessionUserId) sessionStorage.setItem(SESSION_KEY, db.sessionUserId)
+    else sessionStorage.removeItem(SESSION_KEY)
   } catch {
     // ignore (private mode, quota)
   }
