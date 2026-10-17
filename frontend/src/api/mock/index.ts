@@ -1,4 +1,5 @@
-// Mock implementation of ZobaApi. Swap for httpApi via VITE_USE_MOCK=false.
+// Mock implementation of ZobaApi. Serves every domain in mock mode and the
+// not-yet-built domains in hybrid mode; see src/api/index.ts for the dispatch.
 import { ApiError } from '../types'
 import type {
   CostEstimate,

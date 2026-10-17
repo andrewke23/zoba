@@ -12,12 +12,13 @@ export default defineConfig({
     chunkSizeWarningLimit: 1100, // maplibre-gl alone is ~1 MB
   },
   server: {
-    // When VITE_USE_MOCK=false, /api calls go to the FastAPI dev server.
+    // The real backend serves /api/v1/* itself, so requests are forwarded
+    // unmodified. Override the target with ZOBA_API_ORIGIN when the API runs
+    // somewhere else.
     proxy: {
       '/api': {
         target: process.env.ZOBA_API_ORIGIN ?? 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },
   },

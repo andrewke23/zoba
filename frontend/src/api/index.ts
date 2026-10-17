@@ -1,9 +1,61 @@
-import { httpApi } from './http'
+// Chooses the API implementation per mode:
+//
+//   mock    — everything is the in-browser mock (demo mode, no server needed)
+//   hybrid  — default: real backend where it exists, mock elsewhere
+//   real    — everything must be real; unimplemented endpoints fail with 501
+//
+// The real backend currently covers auth, cities, trips, invites/members,
+// expenses, settlement, and the cost estimate. Preferences, comparisons,
+// group results, itinerary/solvers, tasks, and packing are still mock-only
+// (see src/api/http.ts), so hybrid keeps the whole app usable meanwhile.
+import { realApi } from './http'
 import { mockApi } from './mock'
-import type { ZobaApi } from './types'
+import { ApiError } from './types'
+import type { Member, UUID, ZobaApi } from './types'
 
-export const USING_MOCK = import.meta.env.VITE_USE_MOCK !== 'false'
+export type ApiMode = 'mock' | 'hybrid' | 'real'
 
-export const api: ZobaApi = USING_MOCK ? mockApi : httpApi
+const envMode = import.meta.env.VITE_API_MODE
+const mode: ApiMode =
+  envMode === 'mock' || envMode === 'real' ? envMode : import.meta.env.VITE_USE_MOCK === 'true' ? 'mock' : 'hybrid'
+
+export const API_MODE: ApiMode = mode
+/** True only in pure demo mode: no backend involved at all. */
+export const USING_MOCK = mode === 'mock'
+
+/** Fill every method the real API doesn't implement with a clear 501. */
+function rejectUnimplemented(base: Partial<ZobaApi>): ZobaApi {
+  const out = { ...base } as Record<string, unknown>
+  for (const key of Object.keys(mockApi) as (keyof ZobaApi)[]) {
+    if (!(key in base)) {
+      out[key] = () =>
+        Promise.reject(
+          new ApiError(501, `${String(key)} isn't served by the backend yet — try demo mode (VITE_API_MODE=mock).`),
+        )
+    }
+  }
+  return out as unknown as ZobaApi
+}
+
+// Voting progress (preferences/comparisons) is mock-owned until the backend
+// grows a preferences domain; membership itself is real. Merge the two so the
+// overview and preferences pages get correct flags either way.
+async function listMembersWithVotingProgress(tripId: UUID): Promise<Member[]> {
+  const members = await realApi.listMembers!(tripId)
+  let progress = new Map<UUID, Pick<Member, 'preferences_submitted' | 'comparisons_done'>>()
+  try {
+    const mockMembers = await mockApi.listMembers(tripId)
+    progress = new Map(
+      mockMembers.map((m) => [m.user_id, { preferences_submitted: m.preferences_submitted, comparisons_done: m.comparisons_done }]),
+    )
+  } catch {
+    // Trip isn't in the mock database — no demo voting data to merge in.
+  }
+  return members.map((m) => ({ ...m, ...progress.get(m.user_id) }))
+}
+
+const hybridApi: ZobaApi = { ...mockApi, ...realApi, listMembers: listMembersWithVotingProgress }
+
+export const api: ZobaApi = mode === 'mock' ? mockApi : mode === 'real' ? rejectUnimplemented(realApi) : hybridApi
 
 export * from './types'

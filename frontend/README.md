@@ -4,8 +4,11 @@ The web app for **Zoba**, a group trip planner (CSDS 395, Group 2). Members vote
 want to go. Zoba combines the votes fairly, builds a day-by-day itinerary, and helps the group
 prepare and split costs.
 
-> **The backend isn't built yet.** For now the app runs on a **mock API** inside your browser, so
-> every screen works without a server. See [Connecting to the real backend](#connecting-to-the-real-backend).
+> The app runs in **hybrid mode** by default: accounts, trips, members, expenses, settlement and the
+> cost estimate talk to the real FastAPI backend, while voting, itinerary, tasks and packing still use
+> an in-browser **mock API** until their backend domains exist. Set `VITE_API_MODE=mock` for the pure
+> demo (no server needed) or `VITE_API_MODE=real` to require the backend everywhere. See
+> [Connecting to the real backend](#connecting-to-the-real-backend).
 
 ---
 
@@ -29,13 +32,21 @@ prepare and split costs.
 
 You need **Node.js 20+** (`node -v` to check).
 
+Start the backend first (from the repository root — see [backend/README.md](../backend/README.md)):
+
+```powershell
+docker compose up -d --build   # API on http://localhost:8000, needs a configured .env
+```
+
+Then, in `frontend/`:
+
 ```bash
-cd frontend
 npm install      # first time, or after pulling new dependencies
 npm run dev      # starts the app at http://localhost:5173
 ```
 
-Open http://localhost:5173 and log in with a demo account below.
+Open http://localhost:5173, register an account, and you're in. To try the full demo without any
+server, run `VITE_API_MODE=mock npm run dev` instead and log in with a demo account below.
 
 | Command | What it does |
 |---|---|
@@ -43,10 +54,14 @@ Open http://localhost:5173 and log in with a demo account below.
 | `npm run build` | Type-checks and builds the production files into `dist/`. Doesn't start a server. |
 | `npm run preview` | Serves the `dist/` build locally, so you can check it. |
 | `npm run lint` | Runs ESLint. Please run it before opening a PR. |
+| `npm run smoke` | With the backend + dev server running, checks every real API call through the proxy. |
 
 ---
 
 ## Demo accounts
+
+> Demo accounts only exist in **mock mode** (`VITE_API_MODE=mock`). In hybrid and real modes,
+> accounts live on the backend — register your own.
 
 All demo accounts use the password **`zoba`**. The login page has buttons that fill these in.
 
@@ -139,8 +154,8 @@ frontend/
     │
     ├── api/
     │   ├── types.ts           # ⭐ Data models + the ZobaApi interface (start here)
-    │   ├── index.ts           # Picks mock or real API
-    │   ├── http.ts            # Real FastAPI client
+    │   ├── index.ts           # Picks the API mode: mock / hybrid / real
+    │   ├── http.ts            # Real FastAPI client (translates to the backend wire format)
     │   └── mock/
     │       ├── seed.ts        # Demo users, trip, Chicago places, expenses
     │       ├── db.ts          # In-browser "database" (localStorage)
@@ -172,13 +187,17 @@ frontend/
 Page component
    │  api.listTasks(tripId)
    ▼
-src/api/index.ts ── VITE_USE_MOCK? ──► mock/   (in-browser, today)
-                                  └──► http.ts (FastAPI, later)
+src/api/index.ts ── VITE_API_MODE ──► mock/             (mock: everything)
+                          │
+                          ├────────► http.ts → backend  (hybrid: real where built,
+                          │                        mock for voting/itinerary/tasks/packing)
+                          └────────► http.ts only       (real: 501 for anything unbuilt)
 ```
 
 - Pages **only** talk to the backend through the `api` object. They never call `fetch` directly.
-- Both `mock/` and `http.ts` implement the same `ZobaApi` interface in `src/api/types.ts`. Switching between them doesn't change any page code.
-- Model field names match the database schema in `data-pipeline/db/schema.sql`.
+- Both `mock/` and `http.ts` implement the same `ZobaApi` interface in `src/api/types.ts`, so pages
+  don't care which one is active. `http.ts` also translates between the frontend models and the
+  backend's wire format (field names, money as cents vs decimal strings, …).
 
 A typical page looks like this:
 
@@ -195,45 +214,64 @@ if (!data) return <Loading />
 
 ## Connecting to the real backend
 
-When the FastAPI server is running on port 8000:
+The app picks its API implementation from `VITE_API_MODE`:
 
-```bash
-VITE_USE_MOCK=false npm run dev
-```
+| Mode | Behavior |
+|---|---|
+| `hybrid` (default) | Real backend where it exists, in-browser mock elsewhere. The yellow banner says which parts are live. |
+| `mock` | Pure demo — everything is mocked, no server needed. |
+| `real` | Everything must be real; calls the backend doesn't implement fail with a clear 501. Use this to see what's still missing. |
 
-Vite forwards any request to `/api/...` to `http://localhost:8000/...`. You can change the
-address with `ZOBA_API_ORIGIN=http://host:port`.
+The dev server forwards any request under `/api/...` to the FastAPI server (default
+`http://localhost:8000`; override with `ZOBA_API_ORIGIN=http://host:port`). The backend already
+serves `/api/v1/*`, so nothing is rewritten.
 
 ### Environment variables
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `VITE_USE_MOCK` | `true` | `false` = use the real backend |
-| `VITE_API_URL` | `/api` | Base URL for API requests |
+| `VITE_API_MODE` | `hybrid` | `mock` \| `hybrid` \| `real` (see table above) |
+| `VITE_USE_MOCK` | — | Legacy: `true` is the same as `VITE_API_MODE=mock` |
+| `VITE_API_URL` | `/api/v1` | Base URL for API requests |
 | `VITE_MAP_STYLE_URL` | OpenFreeMap "liberty" | MapLibre style URL |
 | `ZOBA_API_ORIGIN` | `http://localhost:8000` | Where the dev server forwards `/api` |
 
-You can put these in a `frontend/.env.local` file (it's git-ignored).
+You can put these in a `frontend/.env.local` file (it's git-ignored); see `.env.example`.
 
-### Proposed endpoints
+### Auth
 
-These are in `src/api/http.ts`. **They're a proposal. Backend and frontend should agree on them
-and keep them in sync.**
+The backend issues a **bearer JWT** on register/login; `src/api/http.ts` keeps it in
+`sessionStorage` (per tab, like the mock's session — so two tabs can act as two travelers) and
+sends `Authorization: Bearer …` with every request. There are no cookies, so cross-origin use
+needs the backend's `CORS_ORIGINS` to include the frontend origin.
 
-| Area | Endpoints |
+### What's real vs. mock today
+
+| Real (FastAPI) | Still mock |
 |---|---|
-| Auth (F01) | `POST /auth/register` · `POST /auth/login` · `POST /auth/logout` · `GET /auth/me` |
-| Trips (F02) | `GET /cities` · `GET, POST /trips` · `GET, PUT /trips/{id}` |
-| Invites & members | `GET /invites/{token}` · `POST /invites/{token}/join` · `GET /trips/{id}/members` · `DELETE /trips/{id}/members/{userId}` |
-| Preferences (F07a, F08) | `GET /trips/{id}/destinations` · `GET /trips/{id}/preferences/config` · `GET, PUT /trips/{id}/preferences/me` |
-| Comparisons (F03, F04) | `GET /trips/{id}/comparisons/me` → `{done, target, next}` · `POST /trips/{id}/comparisons` |
-| Ranking (F06, F08a) | `GET /trips/{id}/results` |
-| Itinerary (F09–F14) | `GET /trips/{id}/itinerary` · `POST …/itinerary/generate` · `PUT …/itinerary/locks/{destId}` · `POST …/destinations/{destId}/duration` · `POST …/itinerary/compare` |
-| Prep (F15–F17) | `/trips/{id}/tasks` · `GET …/costs` · `/expenses` · `GET …/settlement` · `/packing` |
+| Register / login / me | Preferences & point allocation (F07a, F08) |
+| Trip create / read / update / list | This-or-that comparisons (F03, F04) |
+| Cities catalog | Group results & fairness ranking (F06, F08a) |
+| Invite links, join, member list & removal | Itinerary generation, locks, solver comparison (F09–F14) |
+| Expenses (add / list / delete) | Tasks (F15) |
+| Settlement (balances + transfers) | Packing list |
+| Cost estimate (admissions, F16) | |
 
-Response formats are the TypeScript types in `src/api/types.ts`.
+When the backend adds an endpoint, implement it in `src/api/http.ts` and move the method from the
+mock to the real side in `src/api/index.ts`.
 
-### Notes for whoever builds the backend
+### Verifying the wiring
+
+With the compose stack and `npm run dev` running:
+
+```bash
+npm run smoke
+```
+
+`scripts/proxy-smoke.mjs` drives every real API call through the dev proxy with the same payloads
+`http.ts` sends, and checks the responses.
+
+### Notes for the remaining backend domains
 
 - **Destinations** need `lat`/`lng` (read out of the `geom` column), `hours` (the rows from
   `destination_hours`, as an array), and a `requires_booking` flag. That flag isn't in the
@@ -242,7 +280,8 @@ Response formats are the TypeScript types in `src/api/types.ts`.
   The UI shows the `HH:MM` part as-is.
 - **Errors**: return JSON `{"detail": "message"}`, as FastAPI does by default. The UI shows `detail` to the user.
   Return 401 when not logged in, and 404 from `GET /itinerary` when none has been generated yet.
-- Auth is expected to use **cookies** (`credentials: 'include'`).
+- Voting progress on the members payload (`preferences_submitted`, `comparisons_done`) is overlaid
+  from the mock in hybrid mode; drop that overlay in `src/api/index.ts` once the backend computes it.
 
 ---
 
@@ -259,7 +298,8 @@ Response formats are the TypeScript types in `src/api/types.ts`.
 
 1. Add the method to the `ZobaApi` interface in `src/api/types.ts`.
 2. Implement it in `src/api/mock/index.ts` (TypeScript will complain until you do).
-3. Implement it in `src/api/http.ts`.
+3. Implement it in `src/api/http.ts` when the backend endpoint exists, and move the method from
+   the mock to the real side of the dispatch in `src/api/index.ts`.
 
 ### Change the demo data
 
@@ -287,7 +327,7 @@ SRS §8 leaves these questions open. The mock picks a value for each so the app 
 | Who can lock stops | Any member (only the organizer regenerates) | `MEMBERS_CAN_LOCK` in `api/mock/index.ts` |
 | Missing opening hours | Treated as open, with a warning | `algorithms.ts` |
 | Booking task due date | 7 days before the stop | `syncAutoTasks` in `api/mock/index.ts` |
-| Trip size | Max 8 travelers on join | `joinTrip` in `api/mock/index.ts` |
+| Trip size | Max 8 travelers on join | `joinTrip` in `api/mock/index.ts` and `MAX_TRIP_MEMBERS` in `backend/app/api/dependencies.py` |
 
 ---
 
@@ -296,8 +336,9 @@ SRS §8 leaves these questions open. The mock picks a value for each so the app 
 | Problem | Fix |
 |---|---|
 | `npm run build` finished but nothing opened | `build` only creates files. Use `npm run dev`. |
+| Login/register fails with a network error | The backend isn't running. `docker compose up -d --build`, or run demo mode: `VITE_API_MODE=mock npm run dev`. |
 | Map is gray or says it couldn't load | Check your internet connection (tiles are online). The timeline still works. |
-| Data looks weird or stuck | Click **Reset demo data** in the yellow banner. |
+| Data looks weird or stuck | Click **Reset demo data** in the yellow banner (mock data only). |
 | Second account can't see the trip | Use a second **tab in the same browser**, not incognito. |
 | Changes from another tab don't appear | Navigate to another page or refresh. Tabs don't update live. |
 | Logged out after opening a new tab | Expected: each tab has its own login. |
