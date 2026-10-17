@@ -86,11 +86,13 @@ CREATE TABLE IF NOT EXISTS trip (
     trip_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     organizer_id    UUID NOT NULL REFERENCES app_user(user_id),
     city_id         TEXT NOT NULL REFERENCES city(city_id),
+    name            TEXT NOT NULL DEFAULT '',       -- app column (backend startup migration on old volumes)
     start_date      DATE NOT NULL,
     end_date        DATE NOT NULL CHECK (end_date >= start_date),
     day_start       TIME NOT NULL,
     day_end         TIME NOT NULL CHECK (day_end > day_start),
     home_base       GEOGRAPHY(Point, 4326) NOT NULL,
+    home_base_label TEXT NOT NULL DEFAULT '',       -- app column (backend startup migration on old volumes)
     invite_token    TEXT UNIQUE,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );

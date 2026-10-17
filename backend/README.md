@@ -19,7 +19,13 @@ docker compose up --build
 The API is available at `http://localhost:8000`, with OpenAPI docs at
 `http://localhost:8000/docs`. PostgreSQL is bound to localhost. The database
 initializer applies the shared schema only for a new volume; existing databases
-receive the additive `app_user.name` column from the backend at startup.
+receive additive columns from the backend at startup (`app_user.name`,
+`trip.name`, `trip.home_base_label`, and invite tokens for older trips).
+
+Browser origins allowed to call the API directly are set with `CORS_ORIGINS`
+(comma-separated; defaults to the Vite dev and preview origins). The frontend
+dev server proxies `/api` same-origin, so CORS only matters when the UI is
+served from a different origin.
 
 Anyone can create an account with `POST /auth/register`; passwords are hashed
 with bcrypt (cost 12) and never stored or logged in plain text. Login responses
@@ -36,11 +42,11 @@ secret to clients.
 ## API
 
 All API routes are under `/api/v1` and require a valid bearer token, except
-registration, login, and the health check. Trip reads, expense reads, and
-expense creation require active trip membership. Only the organizer can invite
-an existing user to the trip. The invitee accepts the pending invitation using
-their own token. Invitations are recorded in the database; no email delivery
-provider is configured. Only the authenticated payer can record an expense in
+registration, login, invite previews, and the health check. Trip reads, expense
+reads, and expense creation require active trip membership. Only the organizer
+can invite an existing user to the trip, edit the trip, or remove members.
+Invitations are recorded in the database; no email delivery provider is
+configured. Only the authenticated payer can record or delete an expense in
 their name.
 
 * `POST /auth/register`: Create a user (`email`, `name`, `password` of at
@@ -49,19 +55,41 @@ their name.
 * `POST /auth/login`: Authenticate with `email` and `password`, returning a
   bearer token. Wrong credentials return 401.
 * `GET /auth/me`: Return the authenticated user's profile.
-* `POST /trips`: Create a trip. `organizer_id` must match the JWT subject, and
-  `city_id` must refer to an existing pipeline city.
-* `GET /trips/{trip_id}`: Read trip details and home-base coordinates.
+* `GET /cities`: List pipeline cities with a `[lng, lat]` centroid of each
+  bounding box and the IANA timezone, for the trip form's city picker.
+* `POST /trips`: Create a trip (`name`, `city_id`, dates, daily window, home
+  base label and coordinates). `organizer_id` must match the JWT subject, and
+  `city_id` must refer to an existing pipeline city. Returns the trip with its
+  generated invite token.
+* `GET /trips`: List the trips the caller has joined, newest first, each with
+  the city name, the caller's role, and the joined-member count.
+* `GET /trips/{trip_id}`: Read trip details, home-base coordinates and label,
+  and invite token (members only).
+* `PUT /trips/{trip_id}`: Update trip settings (organizer only). Omitted fields
+  keep their current values.
+* `GET /invites/{token}`: Preview an invite trip, city and organizer names.
+  Unauthenticated so the join page can render before sign-in; the unguessable
+  token is the authorization.
+* `POST /invites/{token}/join`: Join the trip behind an invite link as a
+  member. Idempotent for existing members; returns 409 when the trip already
+  has 8 joined travelers.
+* `GET /trips/{trip_id}/members`: List members (members only) with email,
+  display name, role, and invitation status.
 * `POST /trips/{trip_id}/members`: Add an existing user by `user_id` (organizer
-  only). Creates a pending invitation.
+  only). Creates a pending invitation; returns 409 when the trip is full.
 * `POST /trips/{trip_id}/members/accept`: Accept the current user's pending
   invitation.
+* `DELETE /trips/{trip_id}/members/{user_id}`: Remove a member (organizer
+  only). The organizer cannot be removed.
 * `POST /trips/{trip_id}/expenses`: Record the payer, description, amount,
   timestamp, and debtor shares. Shares omit the payer; the payer is assigned
   the remaining amount. Shares cannot exceed the expense total.
 * `GET /trips/{trip_id}/expenses`: Read the trip ledger.
-* `GET /trips/{trip_id}/settlement`: Return a list of minimum greedy transfers
-  with `from_user`, `to_user`, and `amount`.
+* `DELETE /trips/{trip_id}/expenses/{expense_id}`: Delete an expense (the
+  authenticated payer only).
+* `GET /trips/{trip_id}/settlement`: Return per-member balances (`paid_cents`,
+  `owed_cents`, `net_cents`) plus the list of minimum greedy transfers with
+  `from_user`, `to_user`, and `amount`.
 * `GET /trips/{trip_id}/cost-estimate`: Sum known destination admission prices
   across the itinerary for one person, reporting priced/unpriced stop counts
   and whether the estimate is complete.
@@ -104,5 +132,6 @@ docker compose up -d --build
 The backend publishes port `8000` on all interfaces and the database stays
 bound to `127.0.0.1`. Open inbound TCP `8000` in the EC2 security group and
 keep `5432` closed. Both services use `restart: unless-stopped` to survive
-reboots. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
+reboots. When the frontend is served from another origin, set `CORS_ORIGINS`
+to its URL. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
 front of port `8000` before serving real traffic.
