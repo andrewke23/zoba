@@ -1,0 +1,37 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  --color-brand-50: #eef7f6;
+  --color-brand-100: #d5ecea;
+  --color-brand-200: #acd9d5;
+  --color-brand-300: #7bbfba;
+  --color-brand-400: #4ea29d;
+  --color-brand-500: #318682;
+  --color-brand-600: #256c69;
+  --color-brand-700: #215756;
+  --color-brand-800: #1e4747;
+  --color-brand-900: #1b3c3c;
+
+  --color-accent-500: #f2994a;
+  --color-accent-600: #e07b24;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 antialiased;
+}
+
+/* Hide scrollbar on horizontally scrolling nav bars while keeping them scrollable. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
