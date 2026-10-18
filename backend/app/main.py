@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -8,6 +9,9 @@ from sqlalchemy.exc import DBAPIError
 
 from app.api.router import api_router
 from app.core.database import engine
+from app.services import embedder
+
+logger = logging.getLogger(__name__)
 
 _STARTUP_MIGRATION_ATTEMPTS = 5
 _STARTUP_MIGRATION_BASE_DELAY_SECONDS = 2.0
@@ -57,6 +61,11 @@ async def _apply_startup_migrations() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await _apply_startup_migrations()
+    try:
+        await asyncio.to_thread(embedder.warm_up)
+    except Exception:
+        # Requests still succeed without embeddings; each one retries the load.
+        logger.exception("Embedding model failed to load")
     yield
     await engine.dispose()
 

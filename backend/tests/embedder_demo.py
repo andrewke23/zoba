@@ -110,7 +110,7 @@ async def main() -> None:
     env = load_env()
     dsn = (
         f"postgresql://{env['POSTGRES_USER']}:{env['POSTGRES_PASSWORD']}"
-        f"@127.0.0.1:{env.get('POSTGRES_HOST_PORT', '5432')}/{env['POSTGRES_DB']}"
+        f"@127.0.0.1:{os.environ.get('POSTGRES_HOST_PORT') or env.get('POSTGRES_HOST_PORT', '5432')}/{env['POSTGRES_DB']}"
     )
     connection = await asyncpg.connect(dsn)
     try:

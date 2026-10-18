@@ -11,7 +11,7 @@ from app.core.database import get_session
 from app.core.security import get_current_user_id
 from app.models.entities import City, Membership, MembershipRole, MembershipStatus, Trip, User
 from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead
-from app.services.embedder import record_input_embedding, trip_features
+from app.services.embedder import describe_trip, record_input_embedding
 
 router = APIRouter(prefix="/trips")
 
@@ -27,8 +27,8 @@ async def create_trip(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only the authenticated organizer can create this trip",
         )
-    city_exists = await session.scalar(select(City.city_id).where(City.city_id == payload.city_id))
-    if city_exists is None:
+    city_name = await session.scalar(select(City.name).where(City.city_id == payload.city_id))
+    if city_name is None:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown city_id")
 
     trip = Trip(
@@ -53,20 +53,18 @@ async def create_trip(
             status=MembershipStatus.JOINED,
         )
     )
-    record_input_embedding(
+    await record_input_embedding(
         session,
         user_id=user_id,
         trip_id=trip.id,
         input_kind="trip",
         source_id=str(trip.id),
-        features=trip_features(
-            city_id=payload.city_id,
+        text=describe_trip(
+            city_name=city_name,
             start_date=payload.start_date,
             end_date=payload.end_date,
             daily_start_time=payload.daily_start_time,
             daily_end_time=payload.daily_end_time,
-            home_base_lat=payload.home_base_lat,
-            home_base_lon=payload.home_base_lon,
         ),
     )
     await session.commit()
