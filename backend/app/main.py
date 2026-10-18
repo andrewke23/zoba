@@ -12,6 +12,25 @@ from app.core.database import engine
 _STARTUP_MIGRATION_ATTEMPTS = 5
 _STARTUP_MIGRATION_BASE_DELAY_SECONDS = 2.0
 
+# Mirrors input_embedding in data-pipeline/db/schema.sql for volumes created
+# before the table existed.
+_INPUT_EMBEDDING_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS input_embedding (
+        embedding_id     BIGSERIAL PRIMARY KEY,
+        user_id          UUID NOT NULL REFERENCES app_user(user_id) ON DELETE CASCADE,
+        trip_id          UUID REFERENCES trip(trip_id) ON DELETE CASCADE,
+        input_kind       TEXT NOT NULL,
+        source_id        TEXT NOT NULL,
+        embedder_version TEXT NOT NULL,
+        vector           REAL[] NOT NULL,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS input_embedding_trip_kind_idx ON input_embedding (trip_id, input_kind)",
+    "CREATE INDEX IF NOT EXISTS input_embedding_user_idx ON input_embedding (user_id)",
+)
+
 
 async def _apply_startup_migrations() -> None:
     """Run additive schema fixes.
@@ -26,6 +45,8 @@ async def _apply_startup_migrations() -> None:
                 await connection.execute(
                     text("ALTER TABLE app_user ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''")
                 )
+                for statement in _INPUT_EMBEDDING_DDL:
+                    await connection.execute(text(statement))
             return
         except DBAPIError:
             if attempt == _STARTUP_MIGRATION_ATTEMPTS:

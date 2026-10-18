@@ -15,6 +15,7 @@ from app.schemas.expenses import (
     ExpenseSplitRead,
     TransferRead,
 )
+from app.services.embedder import expense_features, record_input_embedding
 from app.services.settlement import minimize_transfers
 
 router = APIRouter(prefix="/trips/{trip_id}")
@@ -68,6 +69,19 @@ async def create_expense(
     if remainder:
         shares.append(ExpenseShare(expense_id=expense.id, user_id=payload.payer_id, share_cents=remainder))
     session.add_all(shares)
+    record_input_embedding(
+        session,
+        user_id=membership.user_id,
+        trip_id=trip.id,
+        input_kind="expense",
+        source_id=str(expense.id),
+        features=expense_features(
+            description=payload.description,
+            amount=payload.amount,
+            split_count=len(payload.splits),
+            spent_at=payload.date,
+        ),
+    )
     await session.commit()
     return ExpenseRead(
         id=expense.id,

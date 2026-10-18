@@ -151,3 +151,14 @@ reboots. When the frontend is served from another origin, set `CORS_ORIGINS`
 to its URL. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
 reboots. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
 front of port `8000` before serving real traffic.
+
+## Input embeddings
+
+Trip creation and expense entry also write a 64-dimension vector of the
+member's input to `input_embedding` (`app/services/embedder.py`) in the same
+transaction, for later analysis such as clustering members or finding similar
+trips. Vectors come from a deterministic feature-hashing projection, so no
+model download or external API is involved. Each row stores `input_kind`,
+`source_id` (the embedded row's key) and `embedder_version`, not the raw input.
+`preference_features` and `comparison_features` are ready for the preference
+and pairwise-comparison endpoints once they exist.

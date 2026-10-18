@@ -11,6 +11,7 @@ from app.core.database import get_session
 from app.core.security import get_current_user_id
 from app.models.entities import City, Membership, MembershipRole, MembershipStatus, Trip, User
 from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead
+from app.services.embedder import record_input_embedding, trip_features
 
 router = APIRouter(prefix="/trips")
 
@@ -51,6 +52,22 @@ async def create_trip(
             role=MembershipRole.ORGANIZER,
             status=MembershipStatus.JOINED,
         )
+    )
+    record_input_embedding(
+        session,
+        user_id=user_id,
+        trip_id=trip.id,
+        input_kind="trip",
+        source_id=str(trip.id),
+        features=trip_features(
+            city_id=payload.city_id,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            daily_start_time=payload.daily_start_time,
+            daily_end_time=payload.daily_end_time,
+            home_base_lat=payload.home_base_lat,
+            home_base_lon=payload.home_base_lon,
+        ),
     )
     await session.commit()
     return await trip_read(session, trip)
