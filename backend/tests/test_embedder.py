@@ -89,3 +89,18 @@ def test_comparison_direction_matters() -> None:
     park_wins = embed_features(comparison_features(chosen_id=PARK, rejected_id=MUSEUM))
 
     assert museum_wins != park_wins
+
+
+def test_shared_description_words_outweigh_shared_timing() -> None:
+    def expense(description: str, amount: str, spent_at: datetime) -> list[float]:
+        return embed_features(
+            expense_features(description=description, amount=Decimal(amount), split_count=2, spent_at=spent_at)
+        )
+
+    friday_evening = datetime(2026, 11, 6, 19, 30, tzinfo=timezone.utc)
+    saturday_noon = datetime(2026, 11, 7, 12, 15, tzinfo=timezone.utc)
+    dinner = expense("Deep dish pizza dinner", "84.00", friday_evening)
+    lunch = expense("Pizza lunch at Lou Malnati's", "46.50", saturday_noon)
+    cruise = expense("Architecture river cruise tickets", "84.00", friday_evening)
+
+    assert _cosine(dinner, lunch) > _cosine(dinner, cruise)

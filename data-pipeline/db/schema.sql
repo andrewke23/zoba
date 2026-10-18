@@ -162,3 +162,19 @@ CREATE TABLE IF NOT EXISTS expense_share (
     share_cents     INTEGER NOT NULL CHECK (share_cents >= 0),
     PRIMARY KEY (expense_id, user_id)
 );
+
+-- Vector embeddings of member inputs for later analysis (backend
+-- app/services/embedder.py). Points back to the source row instead of copying
+-- its content; also created by the backend at startup on old volumes.
+CREATE TABLE IF NOT EXISTS input_embedding (
+    embedding_id     BIGSERIAL PRIMARY KEY,
+    user_id          UUID NOT NULL REFERENCES app_user(user_id) ON DELETE CASCADE,
+    trip_id          UUID REFERENCES trip(trip_id) ON DELETE CASCADE,
+    input_kind       TEXT NOT NULL,             -- 'trip' | 'expense' | 'preference' | 'comparison'
+    source_id        TEXT NOT NULL,             -- primary key of the embedded row
+    embedder_version TEXT NOT NULL,
+    vector           REAL[] NOT NULL,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS input_embedding_trip_kind_idx ON input_embedding (trip_id, input_kind);
+CREATE INDEX IF NOT EXISTS input_embedding_user_idx ON input_embedding (user_id);

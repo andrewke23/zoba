@@ -2,7 +2,8 @@
 
 Every input a member submits (trip setup, preference allocations, pairwise
 comparisons, expenses) is turned into a flat feature dict and projected into
-``EMBEDDING_DIM`` dimensions with the signed hashing trick, then L2-normalized.
+``EMBEDDING_DIM`` dimensions with the signed hashing trick (each feature
+spread over ``HASHES_PER_FEATURE`` buckets), then L2-normalized.
 The projection is deterministic and needs no trained model, so vectors written
 today stay comparable with vectors written later under the same
 ``EMBEDDER_VERSION``. Bump the version whenever feature extraction changes.
@@ -24,43 +25,69 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entities import InputEmbedding
 
-EMBEDDING_DIM = 64
-EMBEDDER_VERSION = "hash-v1"
+EMBEDDING_DIM = 512
+HASHES_PER_FEATURE = 3
+EMBEDDER_VERSION = "hash-v3"
+
+# Relative weight of each feature's contribution; unlisted features weigh 1.
+# Free text carries what the input is about, so it outweighs context such as
+# when an expense happened, which would otherwise pull unrelated inputs
+# together just for sharing a weekday.
+FEATURE_WEIGHTS: dict[str, float] = {
+    "description": 3.0,
+    "spent_hour": 0.5,
+    "spent_weekday": 0.5,
+}
 
 FeatureValue = str | bool | int | float | Decimal
 _TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+_STOPWORDS = frozenset({"a", "an", "and", "at", "for", "from", "in", "of", "on", "s", "the", "to", "with"})
 
 
-def _bucket(key: str) -> tuple[int, float]:
-    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
-    value = int.from_bytes(digest, "big")
-    return value % EMBEDDING_DIM, 1.0 if (value >> 63) else -1.0
+def _buckets(key: str) -> list[tuple[int, float]]:
+    """``HASHES_PER_FEATURE`` (index, sign) pairs for ``key``.
+
+    Spreading each feature over several buckets means a collision between two
+    unrelated features only shares a fraction of their weight.
+    """
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8 * HASHES_PER_FEATURE).digest()
+    buckets = []
+    for offset in range(0, len(digest), 8):
+        value = int.from_bytes(digest[offset : offset + 8], "big")
+        buckets.append((value % EMBEDDING_DIM, 1.0 if (value >> 63) else -1.0))
+    return buckets
+
+
+def _add(vector: list[float], key: str, weight: float) -> None:
+    share = weight / math.sqrt(HASHES_PER_FEATURE)
+    for index, sign in _buckets(key):
+        vector[index] += sign * share
 
 
 def tokenize(text: str) -> list[str]:
-    return _TOKEN_PATTERN.findall(text.lower())
+    return [token for token in _TOKEN_PATTERN.findall(text.lower()) if token not in _STOPWORDS]
 
 
 def embed_features(features: Mapping[str, FeatureValue]) -> list[float]:
     """Project named features into a unit vector of ``EMBEDDING_DIM`` floats.
 
     Numbers and booleans contribute their value to the bucket of the feature
-    name. Strings contribute one unit per token to the bucket of
-    ``name=token``, scaled so long texts do not dominate short ones.
+    name. Strings contribute to the bucket of ``name=token`` for each token,
+    scaled so a whole text weighs the same however many words it has. Each
+    feature is then scaled by its ``FEATURE_WEIGHTS`` entry.
     """
     vector = [0.0] * EMBEDDING_DIM
     for name, value in features.items():
+        feature_weight = FEATURE_WEIGHTS.get(name, 1.0)
         if isinstance(value, str):
             tokens = tokenize(value)
             if not tokens:
                 continue
-            weight = 1.0 / math.sqrt(len(tokens))
+            weight = feature_weight / math.sqrt(len(tokens))
             for token in tokens:
-                index, sign = _bucket(f"{name}={token}")
-                vector[index] += sign * weight
+                _add(vector, f"{name}={token}", weight)
         else:
-            index, sign = _bucket(name)
-            vector[index] += sign * float(value)
+            _add(vector, name, feature_weight * float(value))
 
     norm = math.sqrt(sum(component * component for component in vector))
     if norm == 0:

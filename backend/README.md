@@ -154,7 +154,7 @@ front of port `8000` before serving real traffic.
 
 ## Input embeddings
 
-Trip creation and expense entry also write a 64-dimension vector of the
+Trip creation and expense entry also write a 512-dimension vector of the
 member's input to `input_embedding` (`app/services/embedder.py`) in the same
 transaction, for later analysis such as clustering members or finding similar
 trips. Vectors come from a deterministic feature-hashing projection, so no
