@@ -1,5 +1,5 @@
 import { Link, Outlet, useNavigate } from 'react-router-dom'
-import { USING_MOCK } from '../api'
+import { API_MODE } from '../api'
 import { resetMockDb } from '../api/mock/db'
 import { useAuth } from '../auth/AuthContext'
 import { Avatar } from '../components/ui'
@@ -16,10 +16,15 @@ export function Logo() {
 }
 
 export function MockBanner() {
-  if (!USING_MOCK) return null
+  const copy = {
+    mock: 'Demo mode — data is mocked in your browser.',
+    hybrid:
+      'Hybrid mode — accounts, trips, members and expenses are live on the backend; voting, itinerary, tasks and packing are still demo data.',
+  }[API_MODE as 'mock' | 'hybrid']
+  if (!copy) return null
   return (
     <div className="bg-amber-100 px-4 py-1.5 text-center text-xs text-amber-900">
-      Demo mode — data is mocked in your browser.{' '}
+      {copy}{' '}
       <button
         className="font-semibold underline"
         onClick={() => {

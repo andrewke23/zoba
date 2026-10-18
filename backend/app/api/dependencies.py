@@ -8,6 +8,10 @@ from app.core.database import get_session
 from app.core.security import get_current_user_id
 from app.models.entities import Membership, MembershipRole, MembershipStatus, Trip
 
+# Matches the frontend's "3–8 travelers" guidance and the member cap shown in
+# trip settings ("X of 8").
+MAX_TRIP_MEMBERS = 8
+
 
 async def get_trip_for_member(
     trip_id: UUID,

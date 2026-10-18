@@ -1,6 +1,6 @@
 // UC-07 / F11: run both schedulers on identical inputs and compare quality + runtime.
 import { Navigate } from 'react-router-dom'
-import { USING_MOCK, api } from '../../api'
+import { API_MODE, api } from '../../api'
 import type { SolverMetrics } from '../../api'
 import { Badge, Button, Card, CardHeader, EmptyState, ErrorBox, Notice, PageHeader } from '../../components/ui'
 import { useAction } from '../../hooks/useAsync'
@@ -36,7 +36,7 @@ export default function SolversPage() {
           </Button>
         }
       />
-      {USING_MOCK && (
+      {API_MODE !== 'real' && (
         <Notice tone="warn">Demo mode: both methods are simple in-browser stand-ins. Real numbers come from the backend solver.</Notice>
       )}
       <ErrorBox error={compare.error} />
