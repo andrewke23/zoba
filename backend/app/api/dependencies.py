@@ -43,16 +43,3 @@ async def require_trip_organizer(
     if membership.role != MembershipRole.ORGANIZER:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Trip organizer required")
     return trip, membership
-
-
-async def count_joined_members(session: AsyncSession, trip_id: UUID) -> int:
-    """Number of active travelers on the trip (invited/left rows don't count)."""
-    rows = (
-        await session.scalars(
-            select(Membership.user_id).where(
-                Membership.trip_id == trip_id,
-                Membership.status == MembershipStatus.JOINED,
-            )
-        )
-    ).all()
-    return len(rows)

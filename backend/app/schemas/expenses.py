@@ -65,20 +65,6 @@ class TransferRead(BaseModel):
     amount: Money
 
 
-class BalanceRead(BaseModel):
-    """One member's net position, in cents to match the data layer."""
-
-    user_id: UUID
-    paid_cents: int
-    owed_cents: int
-    net_cents: int
-
-
-class SettlementRead(BaseModel):
-    balances: list[BalanceRead]
-    transfers: list[TransferRead]
-
-
 class CostEstimateRead(BaseModel):
     trip_id: UUID
     currency: str

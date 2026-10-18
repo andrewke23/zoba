@@ -26,6 +26,7 @@ Browser origins allowed to call the API directly are set with `CORS_ORIGINS`
 (comma-separated; defaults to the Vite dev and preview origins). The frontend
 dev server proxies `/api` same-origin, so CORS only matters when the UI is
 served from a different origin.
+receive the additive `app_user.name` column from the backend at startup.
 
 Anyone can create an account with `POST /auth/register`; passwords are hashed
 with bcrypt (cost 12) and never stored or logged in plain text. Login responses
@@ -47,6 +48,11 @@ reads, and expense creation require active trip membership. Only the organizer
 can invite an existing user to the trip, edit the trip, or remove members.
 Invitations are recorded in the database; no email delivery provider is
 configured. Only the authenticated payer can record or delete an expense in
+registration, login, and the health check. Trip reads, expense reads, and
+expense creation require active trip membership. Only the organizer can invite
+an existing user to the trip. The invitee accepts the pending invitation using
+their own token. Invitations are recorded in the database; no email delivery
+provider is configured. Only the authenticated payer can record an expense in
 their name.
 
 * `POST /auth/register`: Create a user (`email`, `name`, `password` of at
@@ -81,6 +87,13 @@ their name.
   invitation.
 * `DELETE /trips/{trip_id}/members/{user_id}`: Remove a member (organizer
   only). The organizer cannot be removed.
+* `POST /trips`: Create a trip. `organizer_id` must match the JWT subject, and
+  `city_id` must refer to an existing pipeline city.
+* `GET /trips/{trip_id}`: Read trip details and home-base coordinates.
+* `POST /trips/{trip_id}/members`: Add an existing user by `user_id` (organizer
+  only). Creates a pending invitation.
+* `POST /trips/{trip_id}/members/accept`: Accept the current user's pending
+  invitation.
 * `POST /trips/{trip_id}/expenses`: Record the payer, description, amount,
   timestamp, and debtor shares. Shares omit the payer; the payer is assigned
   the remaining amount. Shares cannot exceed the expense total.
@@ -90,6 +103,8 @@ their name.
 * `GET /trips/{trip_id}/settlement`: Return per-member balances (`paid_cents`,
   `owed_cents`, `net_cents`) plus the list of minimum greedy transfers with
   `from_user`, `to_user`, and `amount`.
+* `GET /trips/{trip_id}/settlement`: Return a list of minimum greedy transfers
+  with `from_user`, `to_user`, and `amount`.
 * `GET /trips/{trip_id}/cost-estimate`: Sum known destination admission prices
   across the itinerary for one person, reporting priced/unpriced stop counts
   and whether the estimate is complete.
@@ -134,4 +149,5 @@ bound to `127.0.0.1`. Open inbound TCP `8000` in the EC2 security group and
 keep `5432` closed. Both services use `restart: unless-stopped` to survive
 reboots. When the frontend is served from another origin, set `CORS_ORIGINS`
 to its URL. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
+reboots. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
 front of port `8000` before serving real traffic.
