@@ -9,6 +9,9 @@
 // group results, itinerary/solvers, tasks, and packing are still mock-only
 // (see src/api/http.ts), so hybrid keeps the whole app usable meanwhile.
 import { realApi } from './http'
+import { mockApi, syncMockSession, syncMockTrip } from './mock'
+import { ApiError } from './types'
+import type { City, Member, Trip, User, UUID, ZobaApi } from './types'
 import { hybridBridge, mockApi } from './mock'
 import { ApiError } from './types'
 import type { Member, Trip, UUID, ZobaApi } from './types'
@@ -55,6 +58,40 @@ async function listMembersWithVotingProgress(tripId: UUID): Promise<Member[]> {
   return members.map((m) => ({ ...m, ...progress.get(m.user_id) }))
 }
 
+async function hybridCurrentUser(): Promise<User | null> {
+  const user = await realApi.currentUser!()
+  syncMockSession(user)
+  return user
+}
+
+async function hybridLogin(email: string, password: string): Promise<User> {
+  const user = await realApi.login!(email, password)
+  syncMockSession(user)
+  return user
+}
+
+async function hybridRegister(email: string, password: string, displayName: string): Promise<User> {
+  const user = await realApi.register!(email, password, displayName)
+  syncMockSession(user)
+  return user
+}
+
+async function hybridLogout(): Promise<void> {
+  await realApi.logout!()
+  syncMockSession(null)
+}
+
+export function syncHybridTrip(trip: Trip, members: Member[], city: City | undefined) {
+  if (mode === 'hybrid') syncMockTrip(trip, members, city)
+}
+
+const hybridApi: ZobaApi = {
+  ...mockApi,
+  ...realApi,
+  currentUser: hybridCurrentUser,
+  login: hybridLogin,
+  register: hybridRegister,
+  logout: hybridLogout,
 function mirrorTrip(trip: Trip): Trip {
   hybridBridge.trip(trip)
   return trip

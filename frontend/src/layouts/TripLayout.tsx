@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from 'react'
 import { Link, NavLink, Outlet, useParams } from 'react-router-dom'
-import { api } from '../api'
+import { api, syncHybridTrip } from '../api'
 import type { UUID } from '../api'
 import { useAuth } from '../auth/AuthContext'
 import { Badge, ErrorBox, Loading } from '../components/ui'
@@ -51,6 +51,7 @@ export default function TripLayout() {
 
   const state = useAsync(async () => {
     const [trip, members, cities] = await Promise.all([api.getTrip(tripId), api.listMembers(tripId), api.listCities()])
+    syncHybridTrip(trip, members, cities.find((city) => city.city_id === trip.city_id))
     return { trip, members, cities }
   }, [tripId])
   const { data, error, reload } = state

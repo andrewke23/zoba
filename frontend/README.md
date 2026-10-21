@@ -222,6 +222,10 @@ The app picks its API implementation from `VITE_API_MODE`:
 | `mock` | Pure demo — everything is mocked, no server needed. |
 | `real` | Everything must be real; calls the backend doesn't implement fail with a clear 501. Use this to see what's still missing. |
 
+In hybrid mode, sign in to the backend in the same browser tab. The currently opened trip and its
+members are copied into the in-browser mock for features the backend does not yet implement. Those
+mock-only changes stay in this browser and are not saved to the backend.
+
 The dev server forwards any request under `/api/...` to the FastAPI server (default
 `http://localhost:8000`; override with `ZOBA_API_ORIGIN=http://host:port`). The backend already
 serves `/api/v1/*`, so nothing is rewritten.

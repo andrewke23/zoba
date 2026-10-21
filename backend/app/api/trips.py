@@ -6,15 +6,80 @@ from geoalchemy2.elements import WKTElement
 from geoalchemy2.types import Geometry
 from sqlalchemy import cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.api.dependencies import get_trip_for_member, require_trip_organizer
 from app.core.database import get_session
 from app.core.security import get_current_user_id
 from app.models.entities import City, Membership, MembershipRole, MembershipStatus, Trip, User
+from app.schemas.trips import (
+    MemberCreate,
+    MemberRead,
+    TripCreate,
+    TripMemberRead,
+    TripRead,
+    TripSummaryRead,
+)
 from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead, TripSummaryRead
 from app.services.embedder import describe_trip, record_input_embedding
 
 router = APIRouter(prefix="/trips")
+
+
+@router.get("", response_model=list[TripSummaryRead])
+async def list_trips(
+    user_id: UUID = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
+) -> list[TripSummaryRead]:
+    my_membership = aliased(Membership)
+    joined_member_count = (
+        select(func.count(Membership.user_id))
+        .where(
+            Membership.trip_id == Trip.id,
+            Membership.status == MembershipStatus.JOINED,
+        )
+        .correlate(Trip)
+        .scalar_subquery()
+    )
+    result = await session.execute(
+        select(
+            Trip,
+            City.name,
+            my_membership.role,
+            joined_member_count,
+            func.ST_Y(cast(Trip.home_base, Geometry(srid=4326))),
+            func.ST_X(cast(Trip.home_base, Geometry(srid=4326))),
+        )
+        .join(City, City.city_id == Trip.city_id)
+        .join(my_membership, my_membership.trip_id == Trip.id)
+        .where(
+            my_membership.user_id == user_id,
+            my_membership.status == MembershipStatus.JOINED,
+        )
+        .order_by(Trip.created_at.desc(), Trip.id.desc())
+    )
+
+    return [
+        TripSummaryRead(
+            id=trip.id,
+            organizer_id=trip.organizer_id,
+            city_id=trip.city_id,
+            name=trip.name,
+            start_date=trip.start_date,
+            end_date=trip.end_date,
+            daily_start_time=trip.daily_start_time,
+            daily_end_time=trip.daily_end_time,
+            home_base_lat=latitude,
+            home_base_lon=longitude,
+            home_base_label=trip.home_base_label,
+            invite_token=trip.invite_token,
+            created_at=trip.created_at,
+            city_name=city_name,
+            my_role=role,
+            member_count=member_count,
+        )
+        for trip, city_name, role, member_count, latitude, longitude in result.all()
+    ]
 
 
 @router.post("", response_model=TripRead, status_code=status.HTTP_201_CREATED)
@@ -40,6 +105,7 @@ async def create_trip(
         end_date=payload.end_date,
         daily_start_time=payload.daily_start_time,
         daily_end_time=payload.daily_end_time,
+        home_base_label=payload.home_base_label,
         home_base=WKTElement(
             f"POINT({payload.home_base_lon} {payload.home_base_lat})",
             srid=4326,
@@ -124,6 +190,30 @@ async def read_trip(
     return await trip_read(session, trip)
 
 
+@router.get("/{trip_id}/members", response_model=list[TripMemberRead])
+async def list_trip_members(
+    trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[TripMemberRead]:
+    trip, _ = trip_and_membership
+    rows = (
+        await session.execute(
+            select(Membership, User.email, User.name)
+            .join(User, User.id == Membership.user_id)
+            .where(Membership.trip_id == trip.id)
+            .order_by(Membership.role, User.name, User.email)
+        )
+    ).all()
+    return [
+        TripMemberRead(
+            user_id=membership.user_id,
+            email=email,
+            display_name=name,
+            role=membership.role,
+            status=membership.status,
+        )
+        for membership, email, name in rows
+    ]
 @router.get("/{trip_id}/members", response_model=list[MemberRead])
 async def list_members(
     trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
