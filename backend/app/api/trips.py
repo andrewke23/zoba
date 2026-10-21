@@ -1,3 +1,4 @@
+import secrets
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,7 +11,7 @@ from app.api.dependencies import get_trip_for_member, require_trip_organizer
 from app.core.database import get_session
 from app.core.security import get_current_user_id
 from app.models.entities import City, Membership, MembershipRole, MembershipStatus, Trip, User
-from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead
+from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead, TripSummaryRead
 from app.services.embedder import describe_trip, record_input_embedding
 
 router = APIRouter(prefix="/trips")
@@ -34,6 +35,7 @@ async def create_trip(
     trip = Trip(
         organizer_id=user_id,
         city_id=payload.city_id,
+        name=payload.name,
         start_date=payload.start_date,
         end_date=payload.end_date,
         daily_start_time=payload.daily_start_time,
@@ -42,6 +44,8 @@ async def create_trip(
             f"POINT({payload.home_base_lon} {payload.home_base_lat})",
             srid=4326,
         ),
+        home_base_label=payload.home_base_label,
+        invite_token=secrets.token_urlsafe(18),
     )
     session.add(trip)
     await session.flush()
@@ -71,6 +75,46 @@ async def create_trip(
     return await trip_read(session, trip)
 
 
+@router.get("", response_model=list[TripSummaryRead])
+async def list_trips(
+    user_id: UUID = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
+) -> list[TripSummaryRead]:
+    """Trips the authenticated user has joined, newest first."""
+    rows = (
+        await session.execute(
+            select(Trip, City.name, Membership.role)
+            .join(Membership, Membership.trip_id == Trip.id)
+            .join(City, City.city_id == Trip.city_id)
+            .where(Membership.user_id == user_id, Membership.status == MembershipStatus.JOINED)
+            .order_by(Trip.created_at.desc())
+        )
+    ).all()
+    if not rows:
+        return []
+    member_counts = dict(
+        (
+            await session.execute(
+                select(Membership.trip_id, func.count())
+                .where(
+                    Membership.trip_id.in_([trip.id for trip, _, _ in rows]),
+                    Membership.status == MembershipStatus.JOINED,
+                )
+                .group_by(Membership.trip_id)
+            )
+        ).all()
+    )
+    return [
+        TripSummaryRead(
+            **(await trip_read(session, trip)).model_dump(),
+            city_name=city_name,
+            my_role=role,
+            member_count=member_counts.get(trip.id, 0),
+        )
+        for trip, city_name, role in rows
+    ]
+
+
 @router.get("/{trip_id}", response_model=TripRead)
 async def read_trip(
     trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
@@ -78,6 +122,23 @@ async def read_trip(
 ) -> TripRead:
     trip, _ = trip_and_membership
     return await trip_read(session, trip)
+
+
+@router.get("/{trip_id}/members", response_model=list[MemberRead])
+async def list_members(
+    trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[MemberRead]:
+    trip, _ = trip_and_membership
+    rows = (
+        await session.execute(
+            select(Membership, User)
+            .join(User, User.id == Membership.user_id)
+            .where(Membership.trip_id == trip.id)
+            .order_by(Membership.role, User.name)
+        )
+    ).all()
+    return [member_read(membership, user) for membership, user in rows]
 
 
 @router.post(
@@ -107,11 +168,7 @@ async def add_member(
     )
     session.add(membership)
     await session.commit()
-    return MemberRead(
-        user_id=membership.user_id,
-        role=membership.role,
-        status=membership.status,
-    )
+    return member_read(membership, user)
 
 
 @router.post("/{trip_id}/members/accept", response_model=MemberRead)
@@ -126,7 +183,18 @@ async def accept_invitation(
 
     membership.status = MembershipStatus.JOINED
     await session.commit()
-    return MemberRead(user_id=membership.user_id, role=membership.role, status=membership.status)
+    user = await session.get(User, user_id)
+    return member_read(membership, user)
+
+
+def member_read(membership: Membership, user: User) -> MemberRead:
+    return MemberRead(
+        user_id=membership.user_id,
+        email=user.email,
+        display_name=user.name,
+        role=membership.role,
+        status=membership.status,
+    )
 
 
 async def trip_read(session: AsyncSession, trip: Trip) -> TripRead:
@@ -141,10 +209,14 @@ async def trip_read(session: AsyncSession, trip: Trip) -> TripRead:
         id=trip.id,
         organizer_id=trip.organizer_id,
         city_id=trip.city_id,
+        name=trip.name,
         start_date=trip.start_date,
         end_date=trip.end_date,
         daily_start_time=trip.daily_start_time,
         daily_end_time=trip.daily_end_time,
         home_base_lat=latitude,
         home_base_lon=longitude,
+        home_base_label=trip.home_base_label,
+        invite_token=trip.invite_token,
+        created_at=trip.created_at,
     )

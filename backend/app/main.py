@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -49,6 +50,21 @@ async def _apply_startup_migrations() -> None:
                 await connection.execute(
                     text("ALTER TABLE app_user ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''")
                 )
+                await connection.execute(
+                    text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''")
+                )
+                await connection.execute(
+                    text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS home_base_label TEXT NOT NULL DEFAULT ''")
+                )
+                # Trips created before invite links existed get a token now.
+                missing_tokens = (
+                    await connection.execute(text("SELECT trip_id FROM trip WHERE invite_token IS NULL"))
+                ).all()
+                for (trip_id,) in missing_tokens:
+                    await connection.execute(
+                        text("UPDATE trip SET invite_token = :token WHERE trip_id = :trip_id"),
+                        {"token": secrets.token_urlsafe(18), "trip_id": trip_id},
+                    )
                 for statement in _INPUT_EMBEDDING_DDL:
                     await connection.execute(text(statement))
             return

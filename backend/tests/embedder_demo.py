@@ -123,7 +123,7 @@ async def main() -> None:
         trip_ids: dict[str, str] = {}
         async with client(alice_token) as http:
             for label, body in TRIPS.items():
-                response = await http.post("/trips", json={"organizer_id": alice_id, **body})
+                response = await http.post("/trips", json={"organizer_id": alice_id, "name": label, **body})
                 response.raise_for_status()
                 trip_ids[label] = response.json()["id"]
                 labels[trip_ids[label]] = f"trip: {label}"
