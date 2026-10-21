@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_API_URL?: string
   /** MapLibre style JSON URL */
   readonly VITE_MAP_STYLE_URL?: string
+  /** Nominatim-compatible reverse-geocoding endpoint for the home-base picker */
+  readonly VITE_GEOCODER_URL?: string
 }
 
 interface ImportMeta {

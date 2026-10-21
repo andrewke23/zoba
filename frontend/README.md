@@ -234,6 +234,7 @@ serves `/api/v1/*`, so nothing is rewritten.
 | `VITE_USE_MOCK` | — | Legacy: `true` is the same as `VITE_API_MODE=mock` |
 | `VITE_API_URL` | `/api/v1` | Base URL for API requests |
 | `VITE_MAP_STYLE_URL` | OpenFreeMap "liberty" | MapLibre style URL |
+| `VITE_GEOCODER_URL` | OSM Nominatim `/reverse` | Fills the home-base address when the map is tapped |
 | `ZOBA_API_ORIGIN` | `http://localhost:8000` | Where the dev server forwards `/api` |
 
 You can put these in a `frontend/.env.local` file (it's git-ignored); see `.env.example`.
