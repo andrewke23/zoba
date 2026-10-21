@@ -4,10 +4,12 @@ Loads scored candidates for a trip, runs the scheduler, persists the result to
 ``itinerary_stop``, and returns it in the shape `frontend/src/api/types.ts`
 expects.
 
-Scores currently come from the raw point budgets in the ``preference`` table.
-That is a placeholder: the ranking service replaces ``_member_points`` with
-Bradley-Terry fits and regret-minimising group aggregation. The scheduler does
-not care where a score came from, so that swap touches this module only.
+Scores come from ``app.services.preference.compute_ranking``: Bradley-Terry
+fits over each member's comparisons, blended with their capped point
+allocations, then combined into a fairness-aware group score (mean and
+worst-off member, weighted equally) with hard-no vetoes excluded entirely.
+The scheduler does not care where a score came from, so this module is the
+only place that needed to change when the raw-points placeholder was replaced.
 """
 
 import json
@@ -34,6 +36,7 @@ from app.schemas.itinerary import (
     TopPickStatusRead,
     UnscheduledRead,
 )
+from app.services.preference import ComparisonInput, PreferenceInput, RankingResult, compute_ranking
 from app.services.scheduler import (
     Candidate,
     LockedStop,
@@ -54,7 +57,7 @@ TRAVEL_MODE = "walk"
 # with a stored column when the schema next changes.
 _GENERATED_AT: dict[UUID, datetime] = {}
 
-_CANDIDATE_SQL = text(
+_DESTINATIONS_SQL = text(
     """
     SELECT d.destination_id,
            d.name,
@@ -62,15 +65,8 @@ _CANDIDATE_SQL = text(
            d.est_duration_min,
            ST_Y(d.geom::geometry) AS latitude,
            ST_X(d.geom::geometry) AS longitude,
-           COALESCE(p.points_total, 0) AS points_total,
            COALESCE(h.windows, '[]'::json) AS windows
     FROM destination d
-    LEFT JOIN (
-        SELECT destination_id, SUM(points) AS points_total
-        FROM preference
-        WHERE trip_id = :trip_id AND NOT hard_no AND points IS NOT NULL
-        GROUP BY destination_id
-    ) p ON p.destination_id = d.destination_id
     LEFT JOIN (
         SELECT destination_id,
                json_agg(json_build_object('weekday', weekday, 'open_min', open_min, 'close_min', close_min)) AS windows
@@ -78,22 +74,14 @@ _CANDIDATE_SQL = text(
         GROUP BY destination_id
     ) h ON h.destination_id = d.destination_id
     WHERE d.city_id = :city_id
-      AND NOT EXISTS (
-          SELECT 1 FROM preference x
-          WHERE x.trip_id = :trip_id AND x.destination_id = d.destination_id AND x.hard_no
-      )
-    ORDER BY points_total DESC, d.name
-    LIMIT :candidate_limit
     """
 )
 
-_MEMBER_POINTS_SQL = text(
-    """
-    SELECT user_id, destination_id, points
-    FROM preference
-    WHERE trip_id = :trip_id AND NOT hard_no AND points IS NOT NULL AND points > 0
-    """
+_PREFERENCES_SQL = text(
+    "SELECT user_id, destination_id, points, hard_no FROM preference WHERE trip_id = :trip_id"
 )
+
+_COMPARISONS_SQL = text("SELECT user_id, dest_a, dest_b, chosen FROM comparison WHERE trip_id = :trip_id")
 
 _MEMBERS_SQL = text("SELECT user_id FROM membership WHERE trip_id = :trip_id AND status = 'joined'")
 
@@ -145,35 +133,61 @@ async def _home_base(session: AsyncSession, trip: Trip) -> tuple[float, float]:
     return float(row["latitude"]), float(row["longitude"])
 
 
+async def _joined_members(session: AsyncSession, trip_id: UUID) -> list[UUID]:
+    rows = await session.execute(_MEMBERS_SQL, {"trip_id": trip_id})
+    return [row[0] for row in rows.all()]
+
+
+async def _load_ranking(session: AsyncSession, trip: Trip) -> RankingResult:
+    """Fairness-aware group ranking (F06, F08a) over every destination in the trip's city.
+
+    Scoring lives in ``app.services.preference``; this just gathers the rows it
+    needs (destinations, joined members, point allocations, pairwise
+    comparisons) and hands them over.
+    """
+    destination_rows = (await session.execute(_DESTINATIONS_SQL, {"city_id": trip.city_id})).mappings().all()
+    destination_ids = [row["destination_id"] for row in destination_rows]
+    members = await _joined_members(session, trip.id)
+
+    pref_rows = (await session.execute(_PREFERENCES_SQL, {"trip_id": trip.id})).mappings().all()
+    prefs = [
+        PreferenceInput(
+            user_id=row["user_id"],
+            destination_id=row["destination_id"],
+            points=row["points"] or 0,
+            hard_no=row["hard_no"],
+        )
+        for row in pref_rows
+    ]
+
+    comp_rows = (await session.execute(_COMPARISONS_SQL, {"trip_id": trip.id})).mappings().all()
+    comps = [
+        ComparisonInput(user_id=row["user_id"], dest_a=row["dest_a"], dest_b=row["dest_b"], chosen=row["chosen"])
+        for row in comp_rows
+    ]
+
+    return compute_ranking(destination_ids, members, prefs, comps)
+
+
 async def _load_candidates(session: AsyncSession, trip: Trip, limit: int) -> list[Candidate]:
-    result = await session.execute(
-        _CANDIDATE_SQL, {"trip_id": trip.id, "city_id": trip.city_id, "candidate_limit": limit}
-    )
-    return [
+    destination_rows = (await session.execute(_DESTINATIONS_SQL, {"city_id": trip.city_id})).mappings().all()
+    ranking = await _load_ranking(session, trip)
+    scores = {row.destination_id: row.group_score for row in ranking.rows}
+
+    candidates = [
         Candidate(
             destination_id=row["destination_id"],
             name=row["name"],
-            score=float(row["points_total"]),
+            score=scores.get(row["destination_id"], 0.0),
             location=(float(row["latitude"]), float(row["longitude"])),
             duration_min=visit_minutes(row["est_duration_min"], row["category"]),
             windows=_parse_windows(row["windows"]),
         )
-        for row in result.mappings()
+        for row in destination_rows
+        if row["destination_id"] not in ranking.vetoed
     ]
-
-
-async def _member_points(session: AsyncSession, trip_id: UUID) -> dict[UUID, dict[UUID, float]]:
-    """Per-member point allocations, used for fairness metrics and top picks."""
-    rows = await session.execute(_MEMBER_POINTS_SQL, {"trip_id": trip_id})
-    points: dict[UUID, dict[UUID, float]] = defaultdict(dict)
-    for row in rows.mappings():
-        points[row["user_id"]][row["destination_id"]] = float(row["points"])
-    return points
-
-
-async def _joined_members(session: AsyncSession, trip_id: UUID) -> list[UUID]:
-    rows = await session.execute(_MEMBERS_SQL, {"trip_id": trip_id})
-    return [row[0] for row in rows.all()]
+    candidates.sort(key=lambda c: c.score, reverse=True)
+    return candidates[:limit]
 
 
 async def _load_locked(session: AsyncSession, trip: Trip, tz: ZoneInfo) -> list[LockedStop]:
@@ -197,25 +211,26 @@ async def _load_locked(session: AsyncSession, trip: Trip, tz: ZoneInfo) -> list[
 
 def _fairness(
     scheduled_ids: set[UUID],
-    member_points: dict[UUID, dict[UUID, float]],
+    ranking: RankingResult,
     members: list[UUID],
 ) -> tuple[float, list[TopPickStatusRead]]:
     """Worst individual outcome, plus whether each member's favourite made the trip.
 
-    The minimum is what the regret-bounded objective in the proposal protects.
-    Reporting it every run is how we tell whether fairness is actually working
-    rather than asserting it in a report.
+    "Outcome" is the share of a member's normalized Bradley-Terry/points
+    utility (``app.services.preference.compute_ranking``) that ended up
+    scheduled, not raw points -- so a member who only did pairwise comparisons
+    is weighed the same as one who only spent their point budget. The minimum
+    across members is what the regret-bounded objective in the proposal
+    protects. Reporting it every run is how we tell whether fairness is
+    actually working rather than asserting it in a report.
     """
     utilities: list[float] = []
     top_picks: list[TopPickStatusRead] = []
 
     for user_id in members:
-        allocations = member_points.get(user_id, {})
-        total = sum(allocations.values())
-        earned = sum(points for dest, points in allocations.items() if dest in scheduled_ids)
-        utilities.append(earned / total if total else 0.0)
-
-        if not allocations:
+        destination_utility = ranking.utility.get(user_id)
+        if not destination_utility:
+            utilities.append(0.0)
             top_picks.append(
                 TopPickStatusRead(
                     user_id=user_id, destination_id=None, included=False, reason="No preferences submitted"
@@ -223,8 +238,12 @@ def _fairness(
             )
             continue
 
-        favourite = max(allocations, key=lambda dest: (allocations[dest], str(dest)))
-        included = favourite in scheduled_ids
+        total = sum(destination_utility.values())
+        earned = sum(value for dest, value in destination_utility.items() if dest in scheduled_ids)
+        utilities.append(earned / total if total else 0.0)
+
+        favourite = ranking.top_picks.get(user_id)
+        included = favourite in scheduled_ids if favourite else False
         top_picks.append(
             TopPickStatusRead(
                 user_id=user_id,
@@ -276,13 +295,10 @@ async def _read_itinerary(
         )
 
     scheduled_ids = {row["destination_id"] for row in rows}
-    member_points = await _member_points(session, trip.id)
+    ranking = await _load_ranking(session, trip)
     members = await _joined_members(session, trip.id)
-    min_utility, top_picks = _fairness(scheduled_ids, member_points, members)
-    group_score = sum(
-        sum(points for dest, points in allocations.items() if dest in scheduled_ids)
-        for allocations in member_points.values()
-    )
+    min_utility, top_picks = _fairness(scheduled_ids, ranking, members)
+    group_score = sum(row.group_score for row in ranking.rows if row.destination_id in scheduled_ids)
 
     return ItineraryRead(
         trip_id=trip.id,

@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     SmallInteger,
@@ -116,6 +117,44 @@ class Membership(Base):
         nullable=False,
         server_default=text("'invited'"),
     )
+
+
+class Preference(Base):
+    """A member's point allocation, rank, and hard-no veto for one destination (F07a, F08)."""
+
+    __tablename__ = "preference"
+    __table_args__ = (
+        CheckConstraint("points >= 0"),
+        CheckConstraint("rank >= 1"),
+        ForeignKeyConstraint(["trip_id", "user_id"], ["membership.trip_id", "membership.user_id"], ondelete="CASCADE"),
+    )
+
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    destination_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("destination.destination_id"), primary_key=True
+    )
+    points: Mapped[int | None] = mapped_column(Integer)
+    rank: Mapped[int | None] = mapped_column(Integer)
+    hard_no: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+
+
+class Comparison(Base):
+    """One pairwise this-or-that choice between two destinations (F03, F04)."""
+
+    __tablename__ = "comparison"
+    __table_args__ = (
+        CheckConstraint("dest_a <> dest_b AND chosen IN (dest_a, dest_b)"),
+        ForeignKeyConstraint(["trip_id", "user_id"], ["membership.trip_id", "membership.user_id"], ondelete="CASCADE"),
+    )
+
+    id: Mapped[int] = mapped_column("comparison_id", BigInteger, primary_key=True, autoincrement=True)
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    dest_a: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("destination.destination_id"), nullable=False)
+    dest_b: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("destination.destination_id"), nullable=False)
+    chosen: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("destination.destination_id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
 class ItineraryStop(Base):
