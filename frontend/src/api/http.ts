@@ -15,8 +15,10 @@ import type {
   HHMM,
   ISODate,
   ISODateTime,
+  Itinerary,
   Member,
   Role,
+  SolverMetrics,
   Trip,
   TripInput,
   TripSummary,
@@ -344,8 +346,26 @@ export const realApi: Partial<ZobaApi> = {
     }
     return estimate
   },
+
+  // ---- Itinerary (F09-F14) ----
+  // The backend returns exactly the Itinerary shape from ./types, so these are
+  // passthroughs rather than adapters. Keep them that way: the moment this file
+  // starts reshaping the response, the two contracts can drift without anyone
+  // noticing, and hybrid mode silently falls back to the mock scheduler.
+
+  // 204 (no itinerary generated yet) becomes null, matching the mock.
+  getItinerary: async (id) => (await req<Itinerary | undefined>('GET', `${t(id)}/itinerary`)) ?? null,
+
+  generateItinerary: (id, solver) => req<Itinerary>('POST', `${t(id)}/itinerary`, { solver }),
+
+  // A null lock unpins the stop. Either way the backend re-solves and returns
+  // the whole itinerary, so the caller never has to merge state by hand.
+  setStopLock: (id, destinationId, lock) =>
+    req<Itinerary>('PUT', `${t(id)}/itinerary/stops/${destinationId}/lock`, lock),
+
+  compareSolvers: (id) => req<SolverMetrics[]>('GET', `${t(id)}/itinerary/solver-comparison`),
 }
 
 // Domains the backend does not implement yet are intentionally absent from
 // realApi; src/api/index.ts fills them (mock in hybrid mode, 501 in real mode):
-// preferences, comparisons, group results, itinerary/solvers, tasks, packing.
+// preferences, comparisons, group results, tasks, packing.

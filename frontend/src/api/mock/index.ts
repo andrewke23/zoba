@@ -650,3 +650,55 @@ function progress(tripId: UUID) {
   const mine = db.comparisons.filter((c) => c.trip_id === tripId && c.user_id === m.user_id)
   return { done: mine.length, target: PREF_CONFIG.target_comparisons, next: nextPair(eligible, mine) }
 }
+
+// ---------------------------------------------------------------------------
+// Hybrid-mode bridge
+// ---------------------------------------------------------------------------
+// In hybrid mode, accounts, trips and members live on the backend, but the
+// domains this mock still serves (voting, itinerary, tasks, packing) check the
+// mock's own session and membership tables. Mirroring the real records in
+// keeps those pages working on real trips instead of failing with "Please log in."
+
+function sync(fn: () => void) {
+  refresh()
+  fn()
+  persist()
+}
+
+function upsertUser(user: User) {
+  const existing = db.users.find((u) => u.user_id === user.user_id)
+  if (existing) Object.assign(existing, user)
+  // Backend accounts never sign in to the mock directly; an unguessable
+  // password keeps them from being used that way in demo mode.
+  else db.users.push({ ...user, password: crypto.randomUUID() })
+}
+
+export const hybridBridge = {
+  signIn(user: User) {
+    sync(() => {
+      upsertUser(user)
+      db.sessionUserId = user.user_id
+    })
+  },
+  signOut() {
+    sync(() => {
+      db.sessionUserId = null
+    })
+  },
+  trip(trip: Trip) {
+    sync(() => {
+      const index = db.trips.findIndex((t) => t.trip_id === trip.trip_id)
+      if (index >= 0) db.trips[index] = clone(trip)
+      else db.trips.push(clone(trip))
+    })
+  },
+  members(tripId: UUID, members: Member[]) {
+    sync(() => {
+      for (const { user_id, email, display_name } of members) upsertUser({ user_id, email, display_name })
+      db.memberships = [
+        ...db.memberships.filter((m) => m.trip_id !== tripId),
+        ...members.map(({ user_id, role, status }) => ({ trip_id: tripId, user_id, role, status })),
+      ]
+    })
+  },
+}

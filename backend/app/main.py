@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import secrets
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -8,9 +10,31 @@ from sqlalchemy.exc import DBAPIError
 
 from app.api.router import api_router
 from app.core.database import engine
+from app.services import embedder
+
+logger = logging.getLogger(__name__)
 
 _STARTUP_MIGRATION_ATTEMPTS = 5
 _STARTUP_MIGRATION_BASE_DELAY_SECONDS = 2.0
+
+# Mirrors input_embedding in data-pipeline/db/schema.sql for volumes created
+# before the table existed.
+_INPUT_EMBEDDING_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS input_embedding (
+        embedding_id     BIGSERIAL PRIMARY KEY,
+        user_id          UUID NOT NULL REFERENCES app_user(user_id) ON DELETE CASCADE,
+        trip_id          UUID REFERENCES trip(trip_id) ON DELETE CASCADE,
+        input_kind       TEXT NOT NULL,
+        source_id        TEXT NOT NULL,
+        embedder_version TEXT NOT NULL,
+        vector           REAL[] NOT NULL,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS input_embedding_trip_kind_idx ON input_embedding (trip_id, input_kind)",
+    "CREATE INDEX IF NOT EXISTS input_embedding_user_idx ON input_embedding (user_id)",
+)
 
 
 async def _apply_startup_migrations() -> None:
@@ -32,6 +56,17 @@ async def _apply_startup_migrations() -> None:
                 await connection.execute(
                     text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS home_base_label TEXT NOT NULL DEFAULT ''")
                 )
+                # Trips created before invite links existed get a token now.
+                missing_tokens = (
+                    await connection.execute(text("SELECT trip_id FROM trip WHERE invite_token IS NULL"))
+                ).all()
+                for (trip_id,) in missing_tokens:
+                    await connection.execute(
+                        text("UPDATE trip SET invite_token = :token WHERE trip_id = :trip_id"),
+                        {"token": secrets.token_urlsafe(18), "trip_id": trip_id},
+                    )
+                for statement in _INPUT_EMBEDDING_DDL:
+                    await connection.execute(text(statement))
             return
         except DBAPIError:
             if attempt == _STARTUP_MIGRATION_ATTEMPTS:
@@ -42,6 +77,11 @@ async def _apply_startup_migrations() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await _apply_startup_migrations()
+    try:
+        await asyncio.to_thread(embedder.warm_up)
+    except Exception:
+        # Requests still succeed without embeddings; each one retries the load.
+        logger.exception("Embedding model failed to load")
     yield
     await engine.dispose()
 

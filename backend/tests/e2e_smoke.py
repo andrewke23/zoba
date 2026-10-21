@@ -207,6 +207,7 @@ async def main() -> None:
             json={
                 "organizer_id": alice_id,
                 "city_id": "chicago",
+                "name": "Smoke test trip",
                 "start_date": "2026-11-01",
                 "end_date": "2026-11-03",
                 "daily_start_time": "09:00:00",
@@ -229,6 +230,7 @@ async def main() -> None:
             json={
                 "organizer_id": bob_id,
                 "city_id": "chicago",
+                "name": "Smoke test trip",
                 "start_date": "2026-11-01",
                 "end_date": "2026-11-03",
                 "daily_start_time": "09:00:00",
@@ -244,6 +246,7 @@ async def main() -> None:
             json={
                 "organizer_id": alice_id,
                 "city_id": "nowhere",
+                "name": "Smoke test trip",
                 "start_date": "2026-11-01",
                 "end_date": "2026-11-03",
                 "daily_start_time": "09:00:00",

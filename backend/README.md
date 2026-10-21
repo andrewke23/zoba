@@ -149,3 +149,18 @@ reboots. When the frontend is served from another origin, set `CORS_ORIGINS`
 to its URL. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
 reboots. Put a TLS reverse proxy (e.g. Caddy or nginx + Let's Encrypt) in
 front of port `8000` before serving real traffic.
+
+## Input embeddings
+
+Trip creation and expense entry also store a semantic embedding of the
+member's input in `input_embedding` (`app/services/embedder.py`), for later
+analysis such as clustering members or finding similar trips. Each input is
+rendered as a short sentence and embedded by a local model
+(`BAAI/bge-small-en-v1.5` through fastembed/ONNX, 384 dimensions), so inputs
+with similar meaning land close together and member text never leaves the
+server. The Docker image downloads the model at build time; override it with
+`EMBEDDING_MODEL`. Each row stores `input_kind`, `source_id` (the embedded
+row's key) and `embedder_version` (the model name), not the raw input. If the
+model fails to load, requests still succeed without an embedding.
+`describe_preference` and `describe_comparison` are ready for the preference
+and pairwise-comparison endpoints once they exist.

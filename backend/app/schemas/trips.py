@@ -10,6 +10,7 @@ class TripCreate(BaseModel):
     organizer_id: UUID
     city_id: str = Field(min_length=1, max_length=120)
     name: str = Field(default="", max_length=120)
+    name: str = Field(min_length=1, max_length=120)
     start_date: date
     end_date: date
     daily_start_time: time
@@ -46,6 +47,8 @@ class TripRead(BaseModel):
 
 
 class TripSummaryRead(TripRead):
+    """A trip as listed for one member: trip fields plus listing context."""
+
     city_name: str
     my_role: MembershipRole
     member_count: int
@@ -59,6 +62,8 @@ class MemberRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     user_id: UUID
+    email: str
+    display_name: str
     role: MembershipRole
     status: MembershipStatus
 

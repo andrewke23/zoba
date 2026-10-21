@@ -8,6 +8,14 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Bake the input-embedding model into the image so containers start without
+# network access; EMBEDDING_MODEL is also read by app.core.config.
+ARG EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
+ENV EMBEDDING_MODEL=${EMBEDDING_MODEL} \
+    FASTEMBED_CACHE_PATH=/opt/fastembed
+RUN python -c "import os; from fastembed import TextEmbedding; TextEmbedding(os.environ['EMBEDDING_MODEL'])"
+ENV HF_HUB_OFFLINE=1
+
 COPY app ./app
 
 RUN useradd --create-home --uid 10001 appuser

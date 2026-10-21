@@ -12,6 +12,9 @@ import { realApi } from './http'
 import { mockApi, syncMockSession, syncMockTrip } from './mock'
 import { ApiError } from './types'
 import type { City, Member, Trip, User, UUID, ZobaApi } from './types'
+import { hybridBridge, mockApi } from './mock'
+import { ApiError } from './types'
+import type { Member, Trip, UUID, ZobaApi } from './types'
 
 export type ApiMode = 'mock' | 'hybrid' | 'real'
 
@@ -42,6 +45,7 @@ function rejectUnimplemented(base: Partial<ZobaApi>): ZobaApi {
 // overview and preferences pages get correct flags either way.
 async function listMembersWithVotingProgress(tripId: UUID): Promise<Member[]> {
   const members = await realApi.listMembers!(tripId)
+  hybridBridge.members(tripId, members)
   let progress = new Map<UUID, Pick<Member, 'preferences_submitted' | 'comparisons_done'>>()
   try {
     const mockMembers = await mockApi.listMembers(tripId)
@@ -88,6 +92,40 @@ const hybridApi: ZobaApi = {
   login: hybridLogin,
   register: hybridRegister,
   logout: hybridLogout,
+function mirrorTrip(trip: Trip): Trip {
+  hybridBridge.trip(trip)
+  return trip
+}
+
+// Sign-in and trips are real; each result is mirrored into the mock so the
+// mock-served pages know who is signed in and which trips exist.
+const hybridApi: ZobaApi = {
+  ...mockApi,
+  ...realApi,
+  currentUser: async () => {
+    const user = await realApi.currentUser!()
+    if (user) hybridBridge.signIn(user)
+    else hybridBridge.signOut()
+    return user
+  },
+  register: async (email, password, displayName) => {
+    const user = await realApi.register!(email, password, displayName)
+    hybridBridge.signIn(user)
+    return user
+  },
+  login: async (email, password) => {
+    const user = await realApi.login!(email, password)
+    hybridBridge.signIn(user)
+    return user
+  },
+  logout: async () => {
+    await realApi.logout!()
+    hybridBridge.signOut()
+  },
+  getTrip: async (tripId) => mirrorTrip(await realApi.getTrip!(tripId)),
+  createTrip: async (input) => mirrorTrip(await realApi.createTrip!(input)),
+  updateTrip: async (tripId, input) => mirrorTrip(await realApi.updateTrip!(tripId, input)),
+  joinTrip: async (token) => mirrorTrip(await realApi.joinTrip!(token)),
   listMembers: listMembersWithVotingProgress,
 }
 

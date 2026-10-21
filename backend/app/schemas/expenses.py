@@ -66,6 +66,8 @@ class TransferRead(BaseModel):
 
 
 class BalanceRead(BaseModel):
+    """One member's net position, in cents to match the data layer."""
+
     user_id: UUID
     paid_cents: int
     owed_cents: int

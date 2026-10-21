@@ -5,7 +5,10 @@ from decimal import Decimal
 
 from geoalchemy2.types import Geography, Geometry
 from sqlalchemy import (
+    ARRAY,
+    BigInteger,
     CheckConstraint,
+    Float,
     Date,
     DateTime,
     Enum,
@@ -69,6 +72,7 @@ class Trip(Base):
     id: Mapped[uuid.UUID] = mapped_column("trip_id", Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
     organizer_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("app_user.user_id"), nullable=False)
     city_id: Mapped[str] = mapped_column(String, ForeignKey("city.city_id"), nullable=False)
+    # name and home_base_label are additive app columns (startup migration on old volumes).
     name: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
@@ -151,3 +155,18 @@ class ExpenseShare(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("app_user.user_id"), primary_key=True)
     share_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class InputEmbedding(Base):
+    __tablename__ = "input_embedding"
+
+    id: Mapped[int] = mapped_column("embedding_id", BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("app_user.user_id", ondelete="CASCADE"), nullable=False
+    )
+    trip_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, ForeignKey("trip.trip_id", ondelete="CASCADE"))
+    input_kind: Mapped[str] = mapped_column(String, nullable=False)
+    source_id: Mapped[str] = mapped_column(String, nullable=False)
+    embedder_version: Mapped[str] = mapped_column(String, nullable=False)
+    vector: Mapped[list[float]] = mapped_column(ARRAY(Float(precision=24)), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
