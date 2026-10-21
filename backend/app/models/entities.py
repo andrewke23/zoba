@@ -69,11 +69,13 @@ class Trip(Base):
     id: Mapped[uuid.UUID] = mapped_column("trip_id", Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
     organizer_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("app_user.user_id"), nullable=False)
     city_id: Mapped[str] = mapped_column(String, ForeignKey("city.city_id"), nullable=False)
+    name: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[date] = mapped_column(Date, nullable=False)
     daily_start_time: Mapped[time] = mapped_column("day_start", Time, nullable=False)
     daily_end_time: Mapped[time] = mapped_column("day_end", Time, nullable=False)
     home_base: Mapped[object] = mapped_column(Geography(geometry_type="POINT", srid=4326), nullable=False)
+    home_base_label: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
     invite_token: Mapped[str | None] = mapped_column(String, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 

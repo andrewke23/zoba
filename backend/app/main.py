@@ -26,6 +26,12 @@ async def _apply_startup_migrations() -> None:
                 await connection.execute(
                     text("ALTER TABLE app_user ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''")
                 )
+                await connection.execute(
+                    text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS name TEXT NOT NULL DEFAULT ''")
+                )
+                await connection.execute(
+                    text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS home_base_label TEXT NOT NULL DEFAULT ''")
+                )
             return
         except DBAPIError:
             if attempt == _STARTUP_MIGRATION_ATTEMPTS:

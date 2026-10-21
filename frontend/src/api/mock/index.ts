@@ -2,6 +2,7 @@
 // not-yet-built domains in hybrid mode; see src/api/index.ts for the dispatch.
 import { ApiError } from '../types'
 import type {
+  City,
   CostEstimate,
   Destination,
   Itinerary,
@@ -21,6 +22,64 @@ import { SEED_DESTINATIONS } from './seed'
 
 /** SRS §8 leaves lock authority open; F12 says members may lock. Flip to restrict to organizers. */
 export const MEMBERS_CAN_LOCK = true
+
+export function syncMockSession(user: User | null) {
+  refresh()
+  if (!user) {
+    db.sessionUserId = null
+    persist()
+    return
+  }
+
+  const existingUser = db.users.find((candidate) => candidate.user_id === user.user_id)
+  if (existingUser) {
+    existingUser.email = user.email
+    existingUser.display_name = user.display_name
+  } else {
+    db.users.push({ ...user, password: '' })
+  }
+  db.sessionUserId = user.user_id
+  persist()
+}
+
+export function syncMockTrip(trip: Trip, members: Member[], city: City | undefined) {
+  refresh()
+  const existingTripIndex = db.trips.findIndex((candidate) => candidate.trip_id === trip.trip_id)
+  if (existingTripIndex === -1) db.trips.push(trip)
+  else db.trips[existingTripIndex] = trip
+
+  if (city) {
+    const existingCityIndex = db.cities.findIndex((candidate) => candidate.city_id === city.city_id)
+    if (existingCityIndex === -1) db.cities.push(city)
+    else db.cities[existingCityIndex] = city
+  }
+
+  for (const member of members) {
+    const existingUser = db.users.find((candidate) => candidate.user_id === member.user_id)
+    if (existingUser) {
+      existingUser.email = member.email
+      existingUser.display_name = member.display_name
+    } else {
+      db.users.push({
+        user_id: member.user_id,
+        email: member.email,
+        display_name: member.display_name,
+        password: '',
+      })
+    }
+  }
+
+  db.memberships = db.memberships.filter((membership) => membership.trip_id !== trip.trip_id)
+  db.memberships.push(
+    ...members.map((member) => ({
+      trip_id: trip.trip_id,
+      user_id: member.user_id,
+      role: member.role,
+      status: member.status,
+    })),
+  )
+  persist()
+}
 
 const clone = <T>(x: T): T => structuredClone(x)
 const delay = (ms = 120 + Math.random() * 180) => new Promise((r) => setTimeout(r, ms))

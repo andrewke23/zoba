@@ -10,9 +10,11 @@ from app.api.dependencies import get_trip_for_member
 from app.core.database import get_session
 from app.models.entities import Expense, ExpenseShare, Membership, MembershipStatus, Trip
 from app.schemas.expenses import (
+    BalanceRead,
     ExpenseCreate,
     ExpenseRead,
     ExpenseSplitRead,
+    SettlementRead,
     TransferRead,
 )
 from app.services.settlement import minimize_transfers
@@ -122,14 +124,14 @@ async def list_expenses(
     ]
 
 
-@router.get("/settlement", response_model=list[TransferRead])
+@router.get("/settlement", response_model=SettlementRead)
 async def read_settlement(
     trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
     session: AsyncSession = Depends(get_session),
-) -> list[TransferRead]:
+) -> SettlementRead:
     trip, _ = trip_and_membership
-    balances: dict[UUID, Decimal] = {
-        user_id: Decimal(0)
+    balances: dict[UUID, dict[str, int]] = {
+        user_id: {"paid_cents": 0, "owed_cents": 0}
         for user_id in (
             await session.scalars(
                 select(Membership.user_id).where(Membership.trip_id == trip.id)
@@ -138,24 +140,41 @@ async def read_settlement(
     }
 
     payments = await session.execute(
-        select(Expense.payer_id, func.sum(Expense.amount_cents))
+        select(Expense.payer_id, func.coalesce(func.sum(Expense.amount_cents), 0))
         .where(Expense.trip_id == trip.id)
         .group_by(Expense.payer_id)
     )
     for user_id, paid_cents in payments:
-        balances[user_id] = balances.get(user_id, Decimal(0)) + Decimal(paid_cents) / 100
+        if user_id in balances:
+            balances[user_id]["paid_cents"] += paid_cents
 
     owed = await session.execute(
-        select(ExpenseShare.user_id, func.sum(ExpenseShare.share_cents))
+        select(ExpenseShare.user_id, func.coalesce(func.sum(ExpenseShare.share_cents), 0))
         .join(Expense, Expense.id == ExpenseShare.expense_id)
         .where(Expense.trip_id == trip.id)
         .group_by(ExpenseShare.user_id)
     )
     for user_id, owed_cents in owed:
-        balances[user_id] = balances.get(user_id, Decimal(0)) - Decimal(owed_cents) / 100
+        if user_id in balances:
+            balances[user_id]["owed_cents"] += owed_cents
 
-    transfers = minimize_transfers(balances)
-    return [
-        TransferRead(from_user=transfer.from_user, to_user=transfer.to_user, amount=transfer.amount)
-        for transfer in transfers
-    ]
+    net_balances = {
+        user_id: Decimal(values["paid_cents"] - values["owed_cents"]) / 100
+        for user_id, values in balances.items()
+    }
+    transfers = minimize_transfers(net_balances)
+    return SettlementRead(
+        balances=[
+            BalanceRead(
+                user_id=user_id,
+                paid_cents=values["paid_cents"],
+                owed_cents=values["owed_cents"],
+                net_cents=values["paid_cents"] - values["owed_cents"],
+            )
+            for user_id, values in sorted(balances.items(), key=lambda item: str(item[0]))
+        ],
+        transfers=[
+            TransferRead(from_user=transfer.from_user, to_user=transfer.to_user, amount=transfer.amount)
+            for transfer in transfers
+        ],
+    )

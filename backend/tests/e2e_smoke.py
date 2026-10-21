@@ -350,12 +350,19 @@ async def main() -> None:
 
         # --- F17: settlement --------------------------------------------------
         settlement = await http.get(f"/trips/{trip_id}/settlement")
-        transfers = settlement.json()
+        settlement_body = settlement.json()
         check("GET /settlement -> 200", settlement.status_code == 200, settlement.text)
         check(
             "greedy settlement nets to one transfer of $10 carol->alice",
-            transfers == [{"from_user": carol_id, "to_user": alice_id, "amount": "10.00"}],
-            str(transfers),
+            settlement_body["transfers"]
+            == [{"from_user": carol_id, "to_user": alice_id, "amount": "10.00"}],
+            str(settlement_body),
+        )
+        check(
+            "settlement includes per-member balances",
+            {balance["user_id"] for balance in settlement_body["balances"]}
+            == {alice_id, bob_id, carol_id},
+            str(settlement_body),
         )
 
         # --- F16: cost estimate ------------------------------------------------
