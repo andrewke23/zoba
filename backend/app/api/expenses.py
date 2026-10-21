@@ -3,16 +3,18 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_trip_for_member
 from app.core.database import get_session
-from app.models.entities import Expense, ExpenseShare, Membership, MembershipStatus, Trip
+from app.models.entities import Expense, ExpenseShare, InputEmbedding, Membership, MembershipStatus, Trip
 from app.schemas.expenses import (
+    BalanceRead,
     ExpenseCreate,
     ExpenseRead,
     ExpenseSplitRead,
+    SettlementRead,
     TransferRead,
 )
 from app.services.embedder import describe_expense, record_input_embedding
@@ -131,28 +133,25 @@ async def list_expenses(
     ]
 
 
-@router.get("/settlement", response_model=list[TransferRead])
+@router.get("/settlement", response_model=SettlementRead)
 async def read_settlement(
     trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
     session: AsyncSession = Depends(get_session),
-) -> list[TransferRead]:
+) -> SettlementRead:
     trip, _ = trip_and_membership
-    balances: dict[UUID, Decimal] = {
-        user_id: Decimal(0)
-        for user_id in (
-            await session.scalars(
-                select(Membership.user_id).where(Membership.trip_id == trip.id)
-            )
-        ).all()
-    }
+    member_ids = (
+        await session.scalars(select(Membership.user_id).where(Membership.trip_id == trip.id))
+    ).all()
+    paid_cents: dict[UUID, int] = {user_id: 0 for user_id in member_ids}
+    owed_cents: dict[UUID, int] = {user_id: 0 for user_id in member_ids}
 
     payments = await session.execute(
         select(Expense.payer_id, func.sum(Expense.amount_cents))
         .where(Expense.trip_id == trip.id)
         .group_by(Expense.payer_id)
     )
-    for user_id, paid_cents in payments:
-        balances[user_id] = balances.get(user_id, Decimal(0)) + Decimal(paid_cents) / 100
+    for user_id, paid in payments:
+        paid_cents[user_id] = paid_cents.get(user_id, 0) + paid
 
     owed = await session.execute(
         select(ExpenseShare.user_id, func.sum(ExpenseShare.share_cents))
@@ -160,11 +159,52 @@ async def read_settlement(
         .where(Expense.trip_id == trip.id)
         .group_by(ExpenseShare.user_id)
     )
-    for user_id, owed_cents in owed:
-        balances[user_id] = balances.get(user_id, Decimal(0)) - Decimal(owed_cents) / 100
+    for user_id, share in owed:
+        owed_cents[user_id] = owed_cents.get(user_id, 0) + share
 
+    balances = {
+        user_id: Decimal(paid_cents.get(user_id, 0) - owed_cents.get(user_id, 0)) / 100
+        for user_id in set(paid_cents) | set(owed_cents)
+    }
     transfers = minimize_transfers(balances)
-    return [
-        TransferRead(from_user=transfer.from_user, to_user=transfer.to_user, amount=transfer.amount)
-        for transfer in transfers
-    ]
+    return SettlementRead(
+        balances=[
+            BalanceRead(
+                user_id=user_id,
+                paid_cents=paid_cents.get(user_id, 0),
+                owed_cents=owed_cents.get(user_id, 0),
+                net_cents=paid_cents.get(user_id, 0) - owed_cents.get(user_id, 0),
+            )
+            for user_id in sorted(balances, key=str)
+        ],
+        transfers=[
+            TransferRead(from_user=transfer.from_user, to_user=transfer.to_user, amount=transfer.amount)
+            for transfer in transfers
+        ],
+    )
+
+
+@router.delete("/expenses/{expense_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_expense(
+    expense_id: UUID,
+    trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    trip, membership = trip_and_membership
+    expense = await session.get(Expense, expense_id)
+    if expense is None or expense.trip_id != trip.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found")
+    if expense.payer_id != membership.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the payer can delete the expense",
+        )
+    await session.delete(expense)
+    # The embedding points at the expense by id only, so remove it with the row.
+    await session.execute(
+        delete(InputEmbedding).where(
+            InputEmbedding.input_kind == "expense",
+            InputEmbedding.source_id == str(expense_id),
+        )
+    )
+    await session.commit()
