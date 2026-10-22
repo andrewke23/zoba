@@ -65,3 +65,9 @@ class MemberRead(BaseModel):
     display_name: str
     role: MembershipRole
     status: MembershipStatus
+
+
+class InviteRead(BaseModel):
+    trip: TripRead
+    city_name: str
+    organizer_name: str
