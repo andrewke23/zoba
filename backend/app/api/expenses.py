@@ -139,6 +139,14 @@ async def read_settlement(
     session: AsyncSession = Depends(get_session),
 ) -> SettlementRead:
     trip, _ = trip_and_membership
+    balances: dict[UUID, dict[str, int]] = {
+        user_id: {"paid_cents": 0, "owed_cents": 0}
+        for user_id in (
+            await session.scalars(
+                select(Membership.user_id).where(Membership.trip_id == trip.id)
+            )
+        ).all()
+    }
     member_ids = (
         await session.scalars(select(Membership.user_id).where(Membership.trip_id == trip.id))
     ).all()
@@ -146,19 +154,31 @@ async def read_settlement(
     owed_cents: dict[UUID, int] = {user_id: 0 for user_id in member_ids}
 
     payments = await session.execute(
-        select(Expense.payer_id, func.sum(Expense.amount_cents))
+        select(Expense.payer_id, func.coalesce(func.sum(Expense.amount_cents), 0))
         .where(Expense.trip_id == trip.id)
         .group_by(Expense.payer_id)
     )
+    for user_id, paid_cents in payments:
+        if user_id in balances:
+            balances[user_id]["paid_cents"] += paid_cents
     for user_id, paid in payments:
         paid_cents[user_id] = paid_cents.get(user_id, 0) + paid
 
     owed = await session.execute(
-        select(ExpenseShare.user_id, func.sum(ExpenseShare.share_cents))
+        select(ExpenseShare.user_id, func.coalesce(func.sum(ExpenseShare.share_cents), 0))
         .join(Expense, Expense.id == ExpenseShare.expense_id)
         .where(Expense.trip_id == trip.id)
         .group_by(ExpenseShare.user_id)
     )
+    for user_id, owed_cents in owed:
+        if user_id in balances:
+            balances[user_id]["owed_cents"] += owed_cents
+
+    net_balances = {
+        user_id: Decimal(values["paid_cents"] - values["owed_cents"]) / 100
+        for user_id, values in balances.items()
+    }
+    transfers = minimize_transfers(net_balances)
     for user_id, share in owed:
         owed_cents[user_id] = owed_cents.get(user_id, 0) + share
 
@@ -171,6 +191,11 @@ async def read_settlement(
         balances=[
             BalanceRead(
                 user_id=user_id,
+                paid_cents=values["paid_cents"],
+                owed_cents=values["owed_cents"],
+                net_cents=values["paid_cents"] - values["owed_cents"],
+            )
+            for user_id, values in sorted(balances.items(), key=lambda item: str(item[0]))
                 paid_cents=paid_cents.get(user_id, 0),
                 owed_cents=owed_cents.get(user_id, 0),
                 net_cents=paid_cents.get(user_id, 0) - owed_cents.get(user_id, 0),

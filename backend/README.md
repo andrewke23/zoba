@@ -103,8 +103,6 @@ their name.
 * `GET /trips/{trip_id}/settlement`: Return per-member balances (`paid_cents`,
   `owed_cents`, `net_cents`) plus the list of minimum greedy transfers with
   `from_user`, `to_user`, and `amount`.
-* `GET /trips/{trip_id}/settlement`: Return a list of minimum greedy transfers
-  with `from_user`, `to_user`, and `amount`.
 * `GET /trips/{trip_id}/cost-estimate`: Sum known destination admission prices
   across the itinerary for one person, reporting priced/unpriced stop counts
   and whether the estimate is complete.

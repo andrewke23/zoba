@@ -9,6 +9,7 @@ from app.models.entities import MembershipRole, MembershipStatus
 class TripCreate(BaseModel):
     organizer_id: UUID
     city_id: str = Field(min_length=1, max_length=120)
+    name: str = Field(default="", max_length=120)
     name: str = Field(min_length=1, max_length=120)
     start_date: date
     end_date: date
@@ -65,3 +66,8 @@ class MemberRead(BaseModel):
     display_name: str
     role: MembershipRole
     status: MembershipStatus
+
+
+class TripMemberRead(MemberRead):
+    email: str
+    display_name: str
