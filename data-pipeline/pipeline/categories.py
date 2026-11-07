@@ -39,6 +39,7 @@ _OSM_RULES: list[tuple[str, str, str]] = [
     ("leisure", "park", "park"),
     ("leisure", "garden", "park"),
     ("historic", "*", "landmark"),
+    ("amenity", "place_of_worship", "landmark"),  # notable shrines/temples/cathedrals
     ("shop", "*", "shopping"),
 ]
 

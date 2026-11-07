@@ -8,7 +8,7 @@ from .config import DATABASE_URL, City
 from .hours import parse_opening_hours
 
 
-def load_city(city: City, canon: list[dict], dsn: str = DATABASE_URL) -> dict:
+def load_city(city: City, canon: list[dict], dsn: str = DATABASE_URL, prune: bool = False) -> dict:
     import psycopg
 
     stats = {"destinations": 0, "hours_ok": 0, "hours_partial": 0, "hours_unparseable": 0, "hours_missing": 0}
@@ -27,20 +27,24 @@ def load_city(city: City, canon: list[dict], dsn: str = DATABASE_URL) -> dict:
             stats[f"hours_{hours.status}"] += 1
             cur.execute(
                 """INSERT INTO destination (destination_id, city_id, name, geom, category, address,
-                       website, phone, wikidata_id, est_duration_min, hours_raw, hours_status, field_sources)
+                       website, phone, wikidata_id, description, admission_cost_usd, est_duration_min,
+                       hours_raw, hours_status, field_sources)
                    VALUES (%s, %s, %s, ST_SetSRID(ST_MakePoint(%s, %s), 4326)::geography, %s, %s,
-                           %s, %s, %s, %s, %s, %s, %s)
+                           %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (destination_id) DO UPDATE SET
                        name = EXCLUDED.name, geom = EXCLUDED.geom, category = EXCLUDED.category,
                        address = EXCLUDED.address, website = EXCLUDED.website, phone = EXCLUDED.phone,
-                       wikidata_id = EXCLUDED.wikidata_id, hours_raw = EXCLUDED.hours_raw,
+                       wikidata_id = EXCLUDED.wikidata_id, description = EXCLUDED.description,
+                       admission_cost_usd = EXCLUDED.admission_cost_usd,
+                       est_duration_min = EXCLUDED.est_duration_min, hours_raw = EXCLUDED.hours_raw,
                        hours_status = EXCLUDED.hours_status, field_sources = EXCLUDED.field_sources,
                        updated_at = now()
                    WHERE NOT destination.curated""",   # never overwrite hand-curated rows
                 (
                     d["destination_id"], city.city_id, d["name"], d["lon"], d["lat"],
                     d.get("category") or "other", d.get("address"), d.get("website"), d.get("phone"),
-                    d.get("wikidata_id"), ZOBA_CATEGORIES.get(d.get("category") or "other"),
+                    d.get("wikidata_id"), d.get("description"), d.get("admission_cost_usd"),
+                    d.get("est_duration_min") or ZOBA_CATEGORIES.get(d.get("category") or "other"),
                     d.get("hours_raw"), hours.status, json.dumps(d["field_sources"]),
                 ),
             )
@@ -62,5 +66,19 @@ def load_city(city: City, canon: list[dict], dsn: str = DATABASE_URL) -> dict:
                     (m["source"], m["source_id"], d["destination_id"], json.dumps(m["raw"], default=str)),
                 )
             stats["destinations"] += 1
+
+        if prune:
+            # Remove this city's other pipeline rows (e.g. from an earlier full load),
+            # but never curated rows or places a trip already uses.
+            cur.execute(
+                """DELETE FROM destination d
+                   WHERE d.city_id = %s AND NOT d.curated AND NOT (d.destination_id = ANY(%s::uuid[]))
+                     AND NOT EXISTS (SELECT 1 FROM itinerary_stop s WHERE s.destination_id = d.destination_id)
+                     AND NOT EXISTS (SELECT 1 FROM preference p WHERE p.destination_id = d.destination_id)
+                     AND NOT EXISTS (SELECT 1 FROM comparison c
+                                     WHERE d.destination_id IN (c.dest_a, c.dest_b, c.chosen))""",
+                (city.city_id, [d["destination_id"] for d in canon]),
+            )
+            stats["pruned"] = cur.rowcount
         conn.commit()
     return stats

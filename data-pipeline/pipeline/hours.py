@@ -78,6 +78,8 @@ def _expand_days(spec: str) -> tuple[list[int], bool]:
             holiday = True
             continue
         if "-" in part:
+            if part.count("-") != 1:  # e.g. "Mo-We-Fr": ambiguous, skip it
+                continue
             a, b = part.split("-")
             if a not in DAYS or b not in DAYS:
                 holiday = holiday or "PH" in (a, b)
@@ -113,6 +115,15 @@ def _parse_times(text: str) -> list[tuple[int, int]] | None:
 
 
 def parse_opening_hours(raw: str | None) -> ParsedHours:
+    """Never raises: anything unexpected comes back as 'unparseable' so one odd string
+    can't stop a whole city (a 'Mo-We-Fr' in Montreal's data used to crash it)."""
+    try:
+        return _parse(raw)
+    except Exception as exc:  # noqa: BLE001 - defensive by design
+        return ParsedHours(status="unparseable", notes=[f"parser error: {type(exc).__name__}"])
+
+
+def _parse(raw: str | None) -> ParsedHours:
     if raw is None or not str(raw).strip():
         return ParsedHours(status="missing")
 

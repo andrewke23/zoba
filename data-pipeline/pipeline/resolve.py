@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 from rapidfuzz import fuzz
 
 RADIUS_M = 150.0
-DEFAULT_THRESHOLD = 0.75
+DEFAULT_THRESHOLD = 0.80  # best F1 on 200 hand-labeled Chicago pairs (eval.py): P 0.77, R 0.88
 WEIGHTS = {"name": 0.65, "dist": 0.35}
 
 _STOP = {"the", "a", "an", "of", "and", "at"}
@@ -29,7 +29,9 @@ _NAMESPACE = uuid.UUID("6f1c2a8e-6b0e-4c55-9a8b-2b7d3c0e5a11")
 # Which source to trust first for each canonical field
 FIELD_PRIORITY = {
     "name": ["osm", "fsq"],
-    "category": ["fsq", "osm"],
+    # OSM first: its tourism/amenity tags are reliable for attractions, while Foursquare
+    # labels can be odd (it called the Suntory Museum of Art a cafe). OSM "other" is skipped below.
+    "category": ["osm", "fsq"],
     "address": ["fsq", "osm"],
     "website": ["osm", "fsq"],
     "phone": ["fsq", "osm"],
@@ -51,35 +53,70 @@ def haversine_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def normalize_name(name: str | None) -> str:
-    if not name:
+    """Lowercase, strip accents and punctuation, drop filler words.
+
+    Works for any script: "Café" -> "cafe", but "東京タワー" and "경복궁" are kept
+    (an older version dropped every non-English character, so Asian names matched nothing).
+    """
+    if not isinstance(name, str) or not name:
         return ""
-    s = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
-    s = s.lower().replace("&", " and ")
-    s = re.sub(r"[^a-z0-9 ]+", " ", s)
+    s = unicodedata.normalize("NFKD", name)
+    s = "".join(ch for ch in s if not unicodedata.combining(ch))  # é -> e; CJK untouched
+    s = unicodedata.normalize("NFKC", s).casefold().replace("&", " and ")
+    s = re.sub(r"[^\w ]+|_", " ", s)
     return " ".join(t for t in s.split() if t not in _STOP)
 
 
+def _names(r: dict) -> list[str]:
+    """The record's main name plus any alternates (English, romanized, local)."""
+    out = []
+    for n in [r.get("name"), *(r.get("alt_names") or [])]:
+        n = normalize_name(n)
+        if n and n not in out:
+            out.append(n)
+    return out
+
+
+def name_similarity(a: dict, b: dict) -> float:
+    """Best fuzzy match over every name pair, so 'Tokyo Tower' matches 東京タワー via its name:en."""
+    best = 0.0
+    for na in _names(a):
+        for nb in _names(b):
+            best = max(best, fuzz.token_set_ratio(na, nb) / 100.0)
+            if best == 1.0:
+                return best
+    return best
+
+
 def _domain(url: str | None) -> str | None:
-    if not url:
+    """Website domain, or None if missing or malformed (never raises: one bad URL
+    must not stop a city's whole run)."""
+    if not isinstance(url, str) or not url.strip():
         return None
+    # NFKC turns full-width characters (common in Japanese data, e.g. "http：//") into normal ones.
+    url = unicodedata.normalize("NFKC", url).strip().split()[0].split(";")[0]
     if "://" not in url:
         url = "http://" + url
-    host = urlparse(url).netloc.lower()
-    return host[4:] if host.startswith("www.") else host or None
+    try:
+        host = urlparse(url).netloc.lower().split("@")[-1].split(":")[0]
+    except ValueError:
+        return None
+    host = host[4:] if host.startswith("www.") else host
+    return host if "." in host else None
 
 
 def _digits(phone: str | None) -> str | None:
-    if not phone:
+    if not isinstance(phone, str):
         return None
-    d = re.sub(r"\D", "", phone)
+    phone = unicodedata.normalize("NFKC", phone)  # full-width digits -> 0-9
+    d = re.sub(r"[^0-9]", "", phone)
     return d[-10:] if len(d) >= 10 else None
 
 
 def pair_features(a: dict, b: dict) -> dict:
-    na, nb = normalize_name(a["name"]), normalize_name(b["name"])
     dist = haversine_m(a["lat"], a["lon"], b["lat"], b["lon"])
     return {
-        "name_sim": fuzz.token_set_ratio(na, nb) / 100.0 if na and nb else 0.0,
+        "name_sim": name_similarity(a, b),
         "dist_m": dist,
         "same_wikidata": bool(a.get("wikidata_id") and a.get("wikidata_id") == b.get("wikidata_id")),
         "same_domain": bool(_domain(a.get("website")) and _domain(a.get("website")) == _domain(b.get("website"))),
@@ -108,10 +145,17 @@ def score(f: dict, radius_m: float = RADIUS_M) -> float:
 
 def candidate_pairs(records: list[dict], radius_m: float = RADIUS_M):
     """Yield (i, j) index pairs from different sources within radius_m."""
-    cell_deg = radius_m / 111_000.0  # ~ degrees latitude per cell
+    if not records:
+        return
+    # Cells must be at least radius_m wide in BOTH directions. A degree of longitude
+    # shrinks away from the equator (~70 km in London vs 111 km), so widen lon cells,
+    # otherwise pairs ~100-150 m apart east-west were never compared.
+    max_lat = max(abs(r["lat"]) for r in records)
+    cell_lat = radius_m / 111_000.0
+    cell_lon = radius_m / (111_000.0 * math.cos(math.radians(min(max_lat, 85.0))))
     grid: dict[tuple[int, int], list[int]] = defaultdict(list)
     for i, r in enumerate(records):
-        grid[(int(r["lat"] // cell_deg), int(r["lon"] // cell_deg))].append(i)
+        grid[(int(r["lat"] // cell_lat), int(r["lon"] // cell_lon))].append(i)
 
     for (gx, gy), idxs in grid.items():
         neighbors = [
@@ -176,12 +220,20 @@ def merge(members: list[dict]) -> dict:
     for fld, order in FIELD_PRIORITY.items():
         for src in order + [s for s in by_source if s not in order]:
             val = by_source.get(src, {}).get(fld)
+            if fld == "category" and val == "other":
+                continue  # an uncategorized source shouldn't override a real category
             if val:
                 canon[fld] = val
                 canon["field_sources"][fld] = src
                 break
         else:
             canon[fld] = None
+    # Show English names in the app when OSM has one (東京タワー -> "Tokyo Tower"); keep the local name.
+    osm = by_source.get("osm")
+    if osm and osm.get("name_en") and osm.get("name_en") != canon.get("name"):
+        canon["name_local"] = canon["name"]
+        canon["name"] = osm["name_en"]
+        canon["field_sources"]["name"] = "osm:name:en"
     # Coordinates: prefer OSM (usually the building centroid), else first available
     loc = by_source.get("osm") or members[0]
     canon["lat"], canon["lon"] = loc["lat"], loc["lon"]
