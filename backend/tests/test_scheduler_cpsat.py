@@ -177,3 +177,52 @@ def test_objective_matches_scheduled_score():
     candidates = [place(1, "A", 12.5), place(2, "B", 7.5)]
     result = solve(candidates)
     assert result.objective == pytest.approx(result.itinerary.total_score, abs=0.01)
+
+
+def test_warm_start_never_loses_to_greedy_at_scale():
+    """Regression test for the cold-start failure found in the Nov benchmark.
+
+    Without the greedy hint, CP-SAT spent its entire time budget on 40+
+    candidate instances and returned a *worse* itinerary than the heuristic
+    it was supposed to improve on. The hint makes greedy's answer the search's
+    floor, so this must hold at any instance size.
+    """
+    candidates = [
+        place(
+            i,
+            f"P{i}",
+            score=1.0 + (i % 7),
+            duration=45 + (i % 4) * 15,
+            location=(41.50 + (i % 9) * 0.01, -81.60 + (i % 11) * 0.01),
+        )
+        for i in range(1, 41)
+    ]
+    kwargs = dict(
+        days=[MONDAY, TUESDAY],
+        day_start_minute=NINE_AM,
+        day_end_minute=SIX_PM,
+        home_base=HOME,
+    )
+    greedy = schedule_trip(candidates, **kwargs)
+    warm = solve_trip(candidates, **kwargs, time_limit_seconds=3.0, warm_start=True)
+
+    assert warm.itinerary.total_score >= greedy.total_score
+
+
+def test_warm_start_hint_produces_a_feasible_itinerary():
+    """A bad hint is silently dropped by CP-SAT, which would hide a broken
+    seed. Assert the warm-started answer is actually schedulable."""
+    candidates = [place(i, f"P{i}", score=float(i), duration=60) for i in range(1, 13)]
+    kwargs = dict(
+        days=[MONDAY],
+        day_start_minute=NINE_AM,
+        day_end_minute=SIX_PM,
+        home_base=HOME,
+        travel=no_travel,
+    )
+    result = solve_trip(candidates, **kwargs, warm_start=True)
+
+    assert result.status in ("OPTIMAL", "FEASIBLE")
+    for stop in result.itinerary.stops:
+        assert NINE_AM <= stop.start_minute
+        assert stop.end_minute <= SIX_PM

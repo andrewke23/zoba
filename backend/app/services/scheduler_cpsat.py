@@ -47,6 +47,7 @@ from app.services.scheduler import (
     LockedStop,
     ScheduledStop,
     TravelEstimator,
+    schedule_trip,
     straight_line_estimator,
 )
 
@@ -123,6 +124,7 @@ def solve_trip(
     locked: Iterable[LockedStop] = (),
     time_limit_seconds: float = DEFAULT_TIME_LIMIT_SECONDS,
     workers: int = 8,
+    warm_start: bool = True,
 ) -> CpSatResult:
     """Build an itinerary with CP-SAT. Same inputs as ``schedule_trip``."""
     cp_model = _require_ortools()
@@ -244,6 +246,42 @@ def solve_trip(
         )
     )
 
+    # WARM START
+    # ----------
+    # Hand CP-SAT the greedy solution as a starting hint. Without it the
+    # search begins from nothing and, on instances past roughly 40
+    # candidates, spends its whole time budget before reaching a solution as
+    # good as the one the heuristic produced in under a millisecond. With the
+    # hint, CP-SAT starts from greedy's answer and can only improve on it, so
+    # the comparison measures what search actually adds rather than how long
+    # it takes to catch up. An infeasible hint is discarded by the solver, so
+    # this is safe even if the two models ever drift apart.
+    if warm_start:
+        seed = schedule_trip(
+            pool,
+            days=days,
+            day_start_minute=day_start_minute,
+            day_end_minute=day_end_minute,
+            home_base=home_base,
+            travel=estimator,
+            locked=locked_stops,
+        )
+        index_of = {c.destination_id: i for i, c in enumerate(pool)}
+        seeded: dict[tuple[int, int], int] = {}
+        for stop in seed.stops:
+            if stop.locked:
+                continue
+            i = index_of.get(stop.destination_id)
+            if i is not None and 0 <= stop.day_index < n_days:
+                seeded[(stop.day_index, i)] = stop.start_minute
+
+        for d in range(n_days):
+            for i in range(n):
+                chosen = (d, i) in seeded
+                model.AddHint(visit[d][i], 1 if chosen else 0)
+                if chosen:
+                    model.AddHint(start[d][i], seeded[(d, i)])
+
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = time_limit_seconds
     solver.parameters.num_search_workers = workers
@@ -333,6 +371,7 @@ def schedule_trip_cpsat(
     travel: TravelEstimator | None = None,
     locked: Iterable[LockedStop] = (),
     time_limit_seconds: float = DEFAULT_TIME_LIMIT_SECONDS,
+    warm_start: bool = True,
 ) -> Itinerary:
     """Drop-in replacement for ``schedule_trip`` that discards solver detail."""
     return solve_trip(
@@ -344,4 +383,5 @@ def schedule_trip_cpsat(
         travel=travel,
         locked=locked,
         time_limit_seconds=time_limit_seconds,
+        warm_start=warm_start,
     ).itinerary

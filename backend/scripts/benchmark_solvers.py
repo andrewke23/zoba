@@ -138,6 +138,16 @@ def main() -> None:
             print(format_table(runs))
             print(f"\nCP-SAT improvement over greedy: {improvement(runs):+.2f}%")
 
+            # Loud about the degenerate case: with no votes in the database
+            # every place scores 1.0, so "score" collapses to "number of
+            # stops" and the comparison stops measuring preference quality.
+            # Numbers from this state should not go in the report unlabelled.
+            if {c.score for c in candidates} == {1.0}:
+                print(
+                    "\n[!] Every candidate scored 1.0 - no preference data in this trip. "
+                    "Score here is just stop count; seed votes before quoting these numbers."
+                )
+
 
 if __name__ == "__main__":
     main()
