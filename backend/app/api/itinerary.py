@@ -43,6 +43,8 @@ from app.services.scheduler import (
     straight_line_estimator,
     visit_minutes,
 )
+from app.services.scheduler_cpsat import SolverUnavailable, schedule_trip_cpsat
+from app.services.solver_comparison import compare
 
 router = APIRouter(prefix="/trips/{trip_id}")
 
@@ -316,12 +318,6 @@ async def generate_itinerary(
     trip, _ = trip_and_membership
     options = payload or GenerateItineraryRequest()
 
-    if options.solver == "cpsat":
-        raise HTTPException(
-            status_code=status.HTTP_501_NOT_IMPLEMENTED,
-            detail="The CP-SAT solver is not implemented yet. Use solver='greedy'.",
-        )
-
     tz = await _timezone(session, trip.city_id)
     home = await _home_base(session, trip)
     candidates = await _load_candidates(session, trip, options.candidate_limit)
@@ -334,9 +330,7 @@ async def generate_itinerary(
     locked = await _load_locked(session, trip, tz)
     days = _trip_days(trip)
 
-    started = time.perf_counter()
-    itinerary = schedule_trip(
-        candidates,
+    solver_kwargs = dict(
         days=days,
         day_start_minute=_minutes_since_midnight(trip.daily_start_time),
         day_end_minute=_minutes_since_midnight(trip.daily_end_time),
@@ -344,6 +338,17 @@ async def generate_itinerary(
         travel=straight_line_estimator(),
         locked=locked,
     )
+
+    started = time.perf_counter()
+    if options.solver == "cpsat":
+        try:
+            itinerary = schedule_trip_cpsat(candidates, **solver_kwargs)
+        except SolverUnavailable as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
+            ) from exc
+    else:
+        itinerary = schedule_trip(candidates, **solver_kwargs)
     runtime_ms = int((time.perf_counter() - started) * 1000)
 
     await session.execute(delete(ItineraryStop).where(ItineraryStop.trip_id == trip.id))
@@ -448,10 +453,50 @@ async def set_stop_lock(
 
 @router.get("/itinerary/solver-comparison", response_model=list[SolverMetricsRead])
 async def compare_solvers(
+    candidate_limit: int = 60,
     trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
     session: AsyncSession = Depends(get_session),
 ) -> list[SolverMetricsRead]:
-    """Metrics per solver. Only greedy exists today; CP-SAT joins this list in November."""
+    """Run both solvers on this trip and report each one's metrics.
+
+    Nothing is persisted. This exists so the quality of the greedy heuristic
+    can be measured against the constraint solver on real data rather than
+    asserted.
+    """
     trip, _ = trip_and_membership
-    itinerary = await _read_itinerary(session, trip)
-    return [itinerary.metrics] if itinerary else []
+    tz = await _timezone(session, trip.city_id)
+    home = await _home_base(session, trip)
+    candidates = await _load_candidates(session, trip, candidate_limit)
+    if not candidates:
+        return []
+
+    locked = await _load_locked(session, trip, tz)
+    member_points = await _member_points(session, trip.id)
+    members = await _joined_members(session, trip.id)
+
+    runs = compare(
+        candidates,
+        days=_trip_days(trip),
+        day_start_minute=_minutes_since_midnight(trip.daily_start_time),
+        day_end_minute=_minutes_since_midnight(trip.daily_end_time),
+        home_base=home,
+        travel=straight_line_estimator(),
+        locked=locked,
+    )
+
+    metrics: list[SolverMetricsRead] = []
+    for run in runs:
+        scheduled = {stop.destination_id for stop in run.itinerary.stops}
+        min_utility, _ = _fairness(scheduled, member_points, members)
+        metrics.append(
+            SolverMetricsRead(
+                solver=run.solver,
+                runtime_ms=run.runtime_ms,
+                group_score=run.total_score,
+                min_member_utility=min_utility,
+                stops_scheduled=run.stops_scheduled,
+                travel_min_total=run.travel_min_total,
+                feasible=run.feasible,
+            )
+        )
+    return metrics
