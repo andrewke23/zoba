@@ -29,6 +29,26 @@ class TripCreate(BaseModel):
         return self
 
 
+class TripUpdate(BaseModel):
+    """Partial trip edit; omitted fields keep their current values."""
+
+    city_id: str | None = Field(default=None, min_length=1, max_length=120)
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    start_date: date | None = None
+    end_date: date | None = None
+    daily_start_time: time | None = None
+    daily_end_time: time | None = None
+    home_base_lat: float | None = Field(default=None, ge=-90, le=90)
+    home_base_lon: float | None = Field(default=None, ge=-180, le=180)
+    home_base_label: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def validate_home_base_pair(self) -> "TripUpdate":
+        if (self.home_base_lat is None) != (self.home_base_lon is None):
+            raise ValueError("home_base_lat and home_base_lon must be provided together")
+        return self
+
+
 class TripRead(BaseModel):
     id: UUID
     organizer_id: UUID
