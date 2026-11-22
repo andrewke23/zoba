@@ -10,6 +10,7 @@ import { ApiError } from './types'
 import type {
   City,
   CostEstimate,
+  Destination,
   Expense,
   ExpenseInput,
   HHMM,
@@ -306,6 +307,10 @@ export const realApi: Partial<ZobaApi> = {
     ),
   removeMember: (id, userId) => req<void>('DELETE', `${t(id)}/members/${userId}`),
 
+  // Destinations ------------------------------------------------------------
+  // The backend returns the Destination shape from ./types as-is.
+  listDestinations: (id) => req<Destination[]>('GET', `${t(id)}/destinations`),
+
   // Expenses, settlement, cost estimate ------------------------------------
   listExpenses: (id) => req<WireExpense[]>('GET', `${t(id)}/expenses`).then((items) => items.map(toExpense)),
   addExpense: (id, input: ExpenseInput) => {
@@ -387,4 +392,5 @@ export const realApi: Partial<ZobaApi> = {
 
 // Domains the backend does not implement yet are intentionally absent from
 // realApi; src/api/index.ts fills them (mock in hybrid mode, 501 in real mode):
-// preferences, comparisons, group results, tasks, packing.
+// preferences, comparisons, group results, tasks, packing. (In hybrid mode the
+// mock serves those against the real destination catalog; see ./index.ts.)
