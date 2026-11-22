@@ -59,7 +59,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     let msg = res.statusText
     try {
       const data = await res.json()
-      msg = data.detail ?? msg
+      msg = formatDetail(data.detail) ?? msg
     } catch {
       // non-JSON error body
     }
@@ -67,6 +67,25 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   }
   if (res.status === 204) return undefined as T
   return res.json() as Promise<T>
+}
+
+/**
+ * FastAPI's `detail` is a string for HTTPException, but a list of
+ * `{loc, msg}` objects for 422 validation errors. Flatten either to text.
+ */
+function formatDetail(detail: unknown): string | undefined {
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    const parts = detail.map((d) => {
+      if (!d || typeof d !== 'object') return String(d)
+      const { loc, msg } = d as { loc?: unknown[]; msg?: string }
+      const field = Array.isArray(loc) ? loc.filter((p) => p !== 'body').join('.') : ''
+      const text = (msg ?? 'Invalid value').replace(/^Value error, /, '')
+      return field ? `${field}: ${text}` : text
+    })
+    return parts.length ? parts.join('; ') : undefined
+  }
+  return undefined
 }
 
 /** Map a specific HTTP status (401 / 404) to null instead of throwing. */
