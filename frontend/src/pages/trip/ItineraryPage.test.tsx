@@ -82,7 +82,7 @@ describe('ItineraryPage — viewing the plan', () => {
     expect(await screen.findByRole('heading', { name: 'Day 1' })).toBeInTheDocument()
     expect(screen.getByText('Friday, December 4')).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Day 2' })).toBeInTheDocument()
-    expect(screen.getAllByText('🏨 Start at Hotel Wacker')).toHaveLength(2)
+    expect(screen.getAllByText('🏠 Start at Hotel Wacker')).toHaveLength(2)
 
     const art = stopEl(container, 'd1')
     expect(art).toHaveTextContent('10:00 AM – 11:30 AM')

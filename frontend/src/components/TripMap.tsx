@@ -64,7 +64,7 @@ export default function TripMap({ days, destinations, homeBase, selectedDay, hig
 
     const home = document.createElement('div')
     home.className = 'flex size-8 items-center justify-center rounded-full bg-stone-900 text-base shadow-lg ring-2 ring-white'
-    home.textContent = '🏨'
+    home.textContent = '🏠'
     home.title = homeBase.label
     markers.current.push(new maplibregl.Marker({ element: home }).setLngLat([homeBase.lng, homeBase.lat]).addTo(m))
 

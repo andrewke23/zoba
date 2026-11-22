@@ -135,7 +135,7 @@ export default function ItineraryPage() {
                 <p className="px-4 py-6 text-center text-sm text-stone-500">Free day — nothing fit, or everything's been scheduled.</p>
               ) : (
                 <ol className="px-4 py-2">
-                  <li className="py-1 text-xs text-stone-400">🏨 Start at {trip.home_base.label}</li>
+                  <li className="py-1 text-xs text-stone-400">🏠 Start at {trip.home_base.label}</li>
                   {d.stops.map((s, i) => (
                     <StopItem
                       key={s.destination_id}
