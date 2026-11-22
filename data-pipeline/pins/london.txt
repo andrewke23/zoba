@@ -1,0 +1,11 @@
+# Must-see places for London: always in the shortlist.
+# One name per line, English or local. If there's no exact match, the most notable place
+# whose name contains every word is used (shortlist prints what it picked; check those).
+# Start a line with - to always exclude a place.
+British Museum
+Tower of London
+Big Ben
+Buckingham Palace
+Tate Modern
+National Gallery
+Westminster Abbey

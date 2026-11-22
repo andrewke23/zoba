@@ -1,0 +1,9 @@
+# Must-see places for Chicago: always in the shortlist.
+# One name per line (exact name; accents and capitals don't matter).
+# Start a line with - to always exclude a place.
+The Art Institute of Chicago
+Shedd Aquarium
+Navy Pier
+Millennium Park      # includes Cloud Gate (the Bean)
+Field Museum
+-Money Museum        # exclude: niche, scored high only because its map entry is detailed
