@@ -220,6 +220,25 @@ async def list_members(
     ]
 
 
+@router.delete("/{trip_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_member(
+    user_id: UUID,
+    trip_and_membership: tuple[Trip, Membership] = Depends(require_trip_organizer),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Remove a member from the trip. The organizer cannot be removed."""
+    trip, _ = trip_and_membership
+    if user_id == trip.organizer_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The organizer cannot be removed")
+
+    membership = await session.get(Membership, (trip.id, user_id))
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+
+    membership.status = MembershipStatus.LEFT
+    await session.commit()
+
+
 @router.post(
     "/{trip_id}/members",
     response_model=MemberRead,
