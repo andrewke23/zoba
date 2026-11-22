@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -10,6 +11,11 @@ export default defineConfig({
       output: { manualChunks: { maplibre: ['maplibre-gl'] } },
     },
     chunkSizeWarningLimit: 1100, // maplibre-gl alone is ~1 MB
+  },
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    restoreMocks: true,
   },
   server: {
     // The real backend serves /api/v1/* itself, so requests are forwarded
