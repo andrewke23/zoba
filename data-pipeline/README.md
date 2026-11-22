@@ -26,7 +26,8 @@ tests/                 unit tests for hours parsing, matching and the shortlist
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+
+
 docker compose up -d                       # PostGIS with schema applied on first start
 python -m pytest -q                        # 121 tests
 
