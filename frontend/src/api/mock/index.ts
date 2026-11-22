@@ -633,6 +633,18 @@ export const hybridBridge = {
       else db.trips.push(clone(trip))
     })
   },
+  /**
+   * Replace the mock catalog for these cities with the backend's places, so the
+   * mock-served voting pages (preferences, compare, results) offer the same
+   * places and IDs the real itinerary generator reads.
+   */
+  destinations(destinations: Destination[]) {
+    if (destinations.length === 0) return
+    sync(() => {
+      const cities = new Set(destinations.map((d) => d.city_id))
+      db.destinations = [...db.destinations.filter((d) => !cities.has(d.city_id)), ...clone(destinations)]
+    })
+  },
   members(tripId: UUID, members: Member[]) {
     sync(() => {
       for (const { user_id, email, display_name } of members) upsertUser({ user_id, email, display_name })
