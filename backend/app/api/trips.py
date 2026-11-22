@@ -20,7 +20,7 @@ from app.models.entities import (
     Trip,
     User,
 )
-from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead, TripSummaryRead
+from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead, TripSummaryRead, TripUpdate
 from app.services.embedder import describe_trip, record_input_embedding
 
 router = APIRouter(prefix="/trips")
@@ -130,6 +130,52 @@ async def read_trip(
     session: AsyncSession = Depends(get_session),
 ) -> TripRead:
     trip, _ = trip_and_membership
+    return await trip_read(session, trip)
+
+
+@router.put("/{trip_id}", response_model=TripRead)
+async def update_trip(
+    payload: TripUpdate,
+    trip_and_membership: tuple[Trip, Membership] = Depends(require_trip_organizer),
+    session: AsyncSession = Depends(get_session),
+) -> TripRead:
+    trip, _ = trip_and_membership
+
+    if payload.city_id is not None:
+        city_name = await session.scalar(select(City.name).where(City.city_id == payload.city_id))
+        if city_name is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown city_id")
+        trip.city_id = payload.city_id
+    if payload.name is not None:
+        trip.name = payload.name
+    if payload.start_date is not None:
+        trip.start_date = payload.start_date
+    if payload.end_date is not None:
+        trip.end_date = payload.end_date
+    if payload.daily_start_time is not None:
+        trip.daily_start_time = payload.daily_start_time
+    if payload.daily_end_time is not None:
+        trip.daily_end_time = payload.daily_end_time
+    if payload.home_base_label is not None:
+        trip.home_base_label = payload.home_base_label
+    if payload.home_base_lat is not None and payload.home_base_lon is not None:
+        trip.home_base = WKTElement(
+            f"POINT({payload.home_base_lon} {payload.home_base_lat})",
+            srid=4326,
+        )
+
+    if trip.end_date < trip.start_date:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="end_date must be on or after start_date",
+        )
+    if trip.daily_end_time <= trip.daily_start_time:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="daily_end_time must be after daily_start_time",
+        )
+
+    await session.commit()
     return await trip_read(session, trip)
 
 
