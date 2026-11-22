@@ -4,9 +4,10 @@ The web app for **Zoba**, a group trip planner (CSDS 395, Group 2). Members vote
 want to go. Zoba combines the votes fairly, builds a day-by-day itinerary, and helps the group
 prepare and split costs.
 
-> The app runs in **hybrid mode** by default: accounts, trips, members, expenses, settlement and the
-> cost estimate talk to the real FastAPI backend, while voting, itinerary, tasks and packing still use
-> an in-browser **mock API** until their backend domains exist. Set `VITE_API_MODE=mock` for the pure
+> The app runs in **hybrid mode** by default: accounts, trips, members, voting (preferences,
+> comparisons, group results), itinerary, tasks, packing, expenses, settlement and the cost estimate
+> talk to the real FastAPI backend. Only visit-duration corrections still use the in-browser
+> **mock API**. Set `VITE_API_MODE=mock` for the pure
 > demo (no server needed) or `VITE_API_MODE=real` to require the backend everywhere. See
 > [Connecting to the real backend](#connecting-to-the-real-backend).
 

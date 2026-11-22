@@ -1,5 +1,5 @@
-// Hybrid mode (the default): trip places come from the backend, and the
-// mock-served voting pages run against those real places.
+// Hybrid mode (the default): voting, tasks and packing go to the backend; the
+// one mock-served method (correctDuration) runs against the backend's places.
 import { describe, expect, it, vi } from 'vitest'
 import { API_MODE, api } from '.'
 import { realApi } from './http'
@@ -52,7 +52,7 @@ function mirrorLondonTrip(tripId: string) {
   hybridBridge.members(tripId, [me])
 }
 
-describe('hybrid destinations', () => {
+describe('hybrid mode', () => {
   it('runs in hybrid mode by default', () => {
     expect(API_MODE).toBe('hybrid')
   })
@@ -63,7 +63,7 @@ describe('hybrid destinations', () => {
     expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/trips/trip-a/destinations')
   })
 
-  it('gives the mock voting pages the real places for any city', async () => {
+  it('gives the mock the real places for any city', async () => {
     mirrorLondonTrip('trip-b')
     // Before: the demo catalog has no London places.
     expect(await mockApi.listDestinations('trip-b')).toEqual([])
@@ -73,31 +73,52 @@ describe('hybrid destinations', () => {
     expect((await mockApi.listDestinations('trip-b')).map((d) => d.name)).toEqual(['British Museum', 'Tate Modern', 'Hyde Park'])
   })
 
-  it('syncs places before comparisons, so pairs use real place IDs', async () => {
-    mirrorLondonTrip('trip-c')
-    spyRealDestinations().mockResolvedValue(LONDON)
+  it('sends voting, tasks and packing to the backend', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, { status: 204 }))
+    const prefs = [{ destination_id: 'lon-1', points: 60, rank: null, hard_no: false }]
 
-    const progress = await api.getComparisonProgress('trip-c')
-    const ids = LONDON.map((d) => d.destination_id)
-    expect(progress.next).not.toBeNull()
-    expect(ids).toContain(progress.next!.dest_a)
-    expect(ids).toContain(progress.next!.dest_b)
+    await api.saveMyPreferences('trip-c', prefs)
+    await api.getComparisonProgress('trip-c')
+    await api.submitComparison('trip-c', { dest_a: 'lon-1', dest_b: 'lon-2' }, 'lon-2')
+    await api.getGroupResults('trip-c')
+    await api.getPreferenceConfig('trip-c')
+    await api.listTasks('trip-c')
+    await api.listPacking('trip-c')
+
+    const calls = fetchSpy.mock.calls.map(([url, init]) => `${init?.method} ${url}`)
+    expect(calls).toEqual([
+      'PUT /api/v1/trips/trip-c/preferences/me',
+      'GET /api/v1/trips/trip-c/comparisons/progress',
+      'POST /api/v1/trips/trip-c/comparisons',
+      'GET /api/v1/trips/trip-c/group-results',
+      'GET /api/v1/trips/trip-c/preference-config',
+      'GET /api/v1/trips/trip-c/tasks',
+      'GET /api/v1/trips/trip-c/packing',
+    ])
+    expect(JSON.parse(fetchSpy.mock.calls[0][1]!.body as string)).toEqual(prefs)
+    expect(JSON.parse(fetchSpy.mock.calls[2][1]!.body as string)).toEqual({ dest_a: 'lon-1', dest_b: 'lon-2', chosen: 'lon-2' })
   })
 
-  it('saves preferences for real places', async () => {
-    mirrorLondonTrip('trip-d')
+  it('reads voting progress from the backend member list', async () => {
+    const member: Member = { ...user, role: 'organizer', status: 'joined', preferences_submitted: true, comparisons_done: 4 }
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([member]), { status: 200 }))
+    expect(await api.listMembers('trip-d')).toEqual([member])
+  })
+
+  it('corrects a duration on a real place', async () => {
+    mirrorLondonTrip('trip-h')
     spyRealDestinations().mockResolvedValue(LONDON)
 
-    await api.saveMyPreferences('trip-d', [{ destination_id: 'lon-1', points: 60, rank: null, hard_no: false }])
-    expect(await api.getMyPreferences('trip-d')).toEqual([expect.objectContaining({ destination_id: 'lon-1', points: 60 })])
+    const updated = await api.correctDuration('trip-h', 'lon-1', 90)
+    expect(updated.destination_id).toBe('lon-1')
   })
 
   it('fetches a trip’s places once per page load', async () => {
     mirrorLondonTrip('trip-e')
     const list = spyRealDestinations().mockResolvedValue(LONDON)
     await api.listDestinations('trip-e')
-    await api.getComparisonProgress('trip-e')
-    await api.getGroupResults('trip-e')
+    await api.correctDuration('trip-e', 'lon-1', 90)
+    await api.correctDuration('trip-e', 'lon-2', 45)
     expect(list).toHaveBeenCalledTimes(1)
   })
 

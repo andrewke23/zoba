@@ -9,17 +9,23 @@
 import { ApiError } from './types'
 import type {
   City,
+  ComparisonProgress,
   CostEstimate,
   Destination,
   Expense,
   ExpenseInput,
+  GroupResults,
   HHMM,
   ISODate,
   ISODateTime,
   Itinerary,
   Member,
+  PackingItem,
+  Preference,
+  PreferenceConfig,
   Role,
   SolverMetrics,
+  Task,
   Trip,
   TripInput,
   TripSummary,
@@ -299,17 +305,24 @@ export const realApi: Partial<ZobaApi> = {
     await req<WireMember>('POST', `/invites/${token}/join`)
     return toTrip(invite.trip)
   },
-  // The backend tracks membership, not voting progress; the flags default to
-  // "not submitted" and are overlaid from the mock in hybrid mode.
-  listMembers: (id) =>
-    req<WireMember[]>('GET', `${t(id)}/members`).then((members) =>
-      members.map((m) => ({ ...m, preferences_submitted: false, comparisons_done: 0 })),
-    ),
+  // Each member comes with their voting progress (preferences submitted,
+  // comparisons done), so the overview and preferences pages read it directly.
+  listMembers: (id) => req<Member[]>('GET', `${t(id)}/members`),
   removeMember: (id, userId) => req<void>('DELETE', `${t(id)}/members/${userId}`),
 
   // Destinations ------------------------------------------------------------
   // The backend returns the Destination shape from ./types as-is.
   listDestinations: (id) => req<Destination[]>('GET', `${t(id)}/destinations`),
+
+  // Preferences, comparisons, group results ---------------------------------
+  // The backend returns the shapes from ./types as-is.
+  getPreferenceConfig: (id) => req<PreferenceConfig>('GET', `${t(id)}/preference-config`),
+  getMyPreferences: (id) => req<Preference[]>('GET', `${t(id)}/preferences/me`),
+  saveMyPreferences: (id, prefs) => req<void>('PUT', `${t(id)}/preferences/me`, prefs),
+  getComparisonProgress: (id) => req<ComparisonProgress>('GET', `${t(id)}/comparisons/progress`),
+  submitComparison: (id, pair, chosen) =>
+    req<ComparisonProgress>('POST', `${t(id)}/comparisons`, { ...pair, chosen }),
+  getGroupResults: (id) => req<GroupResults>('GET', `${t(id)}/group-results`),
 
   // Expenses, settlement, cost estimate ------------------------------------
   listExpenses: (id) => req<WireExpense[]>('GET', `${t(id)}/expenses`).then((items) => items.map(toExpense)),
@@ -388,9 +401,25 @@ export const realApi: Partial<ZobaApi> = {
     req<Itinerary>('PUT', `${t(id)}/itinerary/stops/${destinationId}/lock`, lock),
 
   compareSolvers: (id) => req<SolverMetrics[]>('GET', `${t(id)}/itinerary/solver-comparison`),
+
+  // Tasks and packing list ---------------------------------------------------
+  listTasks: (id) => req<Task[]>('GET', `${t(id)}/tasks`),
+  addTask: (id, title, dueDate) => req<Task>('POST', `${t(id)}/tasks`, { title, due_date: dueDate }),
+  setTaskStatus: (id, taskId, status) => req<Task>('PATCH', `${t(id)}/tasks/${taskId}`, { status }),
+  deleteTask: (id, taskId) => req<void>('DELETE', `${t(id)}/tasks/${taskId}`),
+
+  listPacking: (id) => req<PackingItem[]>('GET', `${t(id)}/packing`),
+  addPacking: (id, label, assigneeId) =>
+    req<PackingItem>('POST', `${t(id)}/packing`, { label, assignee_id: assigneeId }),
+  updatePacking: (id, item) =>
+    req<PackingItem>('PUT', `${t(id)}/packing/${item.item_id}`, {
+      label: item.label,
+      packed: item.packed,
+      assignee_id: item.assignee_id,
+    }),
+  deletePacking: (id, itemId) => req<void>('DELETE', `${t(id)}/packing/${itemId}`),
 }
 
-// Domains the backend does not implement yet are intentionally absent from
-// realApi; src/api/index.ts fills them (mock in hybrid mode, 501 in real mode):
-// preferences, comparisons, group results, tasks, packing. (In hybrid mode the
-// mock serves those against the real destination catalog; see ./index.ts.)
+// The one method the backend does not implement yet, correctDuration, is
+// intentionally absent from realApi; src/api/index.ts fills it (mock in hybrid
+// mode, 501 in real mode).

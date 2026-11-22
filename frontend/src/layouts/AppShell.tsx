@@ -19,7 +19,7 @@ export function MockBanner() {
   const copy = {
     mock: 'Demo mode — data is mocked in your browser.',
     hybrid:
-      'Hybrid mode — accounts, trips, members and expenses are live on the backend; voting, itinerary, tasks and packing are still demo data.',
+      'Hybrid mode — everything is live on the backend except visit-duration corrections, which are still demo data.',
   }[API_MODE as 'mock' | 'hybrid']
   if (!copy) return null
   return (

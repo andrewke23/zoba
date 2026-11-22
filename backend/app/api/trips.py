@@ -10,7 +10,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_trip_for_member, require_trip_organizer
 from app.core.database import get_session
 from app.core.security import get_current_user_id
-from app.models.entities import City, Membership, MembershipRole, MembershipStatus, Trip, User
+from app.models.entities import (
+    City,
+    Comparison,
+    Membership,
+    MembershipRole,
+    MembershipStatus,
+    PreferenceSubmission,
+    Trip,
+    User,
+)
 from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead, TripSummaryRead
 from app.services.embedder import describe_trip, record_input_embedding
 
@@ -138,7 +147,31 @@ async def list_members(
             .order_by(Membership.role, User.name)
         )
     ).all()
-    return [member_read(membership, user) for membership, user in rows]
+    submitted = set(
+        (
+            await session.scalars(
+                select(PreferenceSubmission.user_id).where(PreferenceSubmission.trip_id == trip.id)
+            )
+        ).all()
+    )
+    comparisons_done = dict(
+        (
+            await session.execute(
+                select(Comparison.user_id, func.count())
+                .where(Comparison.trip_id == trip.id)
+                .group_by(Comparison.user_id)
+            )
+        ).all()
+    )
+    return [
+        member_read(membership, user).model_copy(
+            update={
+                "preferences_submitted": membership.user_id in submitted,
+                "comparisons_done": comparisons_done.get(membership.user_id, 0),
+            }
+        )
+        for membership, user in rows
+    ]
 
 
 @router.post(

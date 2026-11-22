@@ -596,7 +596,7 @@ function progress(tripId: UUID) {
 // Hybrid-mode bridge
 // ---------------------------------------------------------------------------
 // In hybrid mode, accounts, trips and members live on the backend, but the
-// domains this mock still serves (voting, itinerary, tasks, packing) check the
+// method this mock still serves (correctDuration) checks the
 // mock's own session and membership tables. Mirroring the real records in
 // keeps those pages working on real trips instead of failing with "Please log in."
 

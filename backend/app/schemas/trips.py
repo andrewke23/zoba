@@ -65,6 +65,9 @@ class MemberRead(BaseModel):
     display_name: str
     role: MembershipRole
     status: MembershipStatus
+    # Voting progress (F07a, F03); only the members list fills these in.
+    preferences_submitted: bool = False
+    comparisons_done: int = 0
 
 
 class InviteRead(BaseModel):
