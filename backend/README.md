@@ -20,7 +20,8 @@ The API is available at `http://localhost:8000`, with OpenAPI docs at
 `http://localhost:8000/docs`. PostgreSQL is bound to localhost. The database
 initializer applies the shared schema only for a new volume; existing databases
 receive additive columns from the backend at startup (`app_user.name`,
-`trip.name`, `trip.home_base_label`, and invite tokens for older trips).
+`trip.name`, `trip.home_base_label`, invite tokens for older trips, and the
+`preference_submission` and `packing_item` tables).
 
 Browser origins allowed to call the API directly are set with `CORS_ORIGINS`
 (comma-separated; defaults to the Vite dev and preview origins). The frontend
@@ -108,6 +109,24 @@ their name.
 * `GET /trips/{trip_id}/cost-estimate`: Sum known destination admission prices
   across the itinerary for one person, reporting priced/unpriced stop counts
   and whether the estimate is complete.
+* `GET /trips/{trip_id}/preference-config`: The point budget (100), per-place
+  point cap (40), and target number of comparisons (15).
+* `GET /trips/{trip_id}/preferences/me`, `PUT /trips/{trip_id}/preferences/me`:
+  Read or replace the caller's point allocation, ranks, and hard nos. Points
+  (excluding vetoed places) may total at most the budget, and every place must be
+  in the trip's city. Saving marks the caller's preferences as submitted.
+* `GET /trips/{trip_id}/comparisons/progress`: The caller's comparison count,
+  target, and next most informative this-or-that pair (`null` when none remain).
+* `POST /trips/{trip_id}/comparisons`: Record a choice (`dest_a`, `dest_b`,
+  `chosen`) and return the updated progress.
+* `GET /trips/{trip_id}/group-results`: Fairness-aware group ranking from all
+  joined members' points and comparisons (Bradley-Terry fits, capped points,
+  hard-no vetoes), plus each member's top pick (`app/services/ranking.py`).
+* `GET|POST /trips/{trip_id}/tasks`, `PATCH|DELETE /trips/{trip_id}/tasks/{task_id}`:
+  The shared trip task list; any member can add, complete, or delete tasks.
+* `GET|POST /trips/{trip_id}/packing`, `PUT|DELETE /trips/{trip_id}/packing/{item_id}`:
+  The shared packing list. `assignee_id` must be a joined member, or `null` for
+  everyone brings their own.
 * `GET /healthz`: Check database connectivity.
 
 The F16 estimate covers admission costs only; unknown destination prices are

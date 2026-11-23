@@ -10,38 +10,74 @@ import json
 from pathlib import Path
 
 from . import categories
-from .config import FSQ_PLACES_PATH, OVERPASS_URL, City, raw_dir
+from .config import FSQ_PLACES_PATH, OVERPASS_URLS, City, raw_dir
+
+# OSM name tags worth matching against. In Tokyo, `name` is 東京タワー while Foursquare
+# may say "Tokyo Tower", so English and romanized names matter.
+NAME_TAGS = ["name", "name:en", "int_name", "official_name", "alt_name", "short_name",
+             "name:ja", "name:ko", "name:zh", "name:zh-Hant", "name:ja-Latn", "name:ko-Latn",
+             "name:zh-Latn-pinyin"]
+
+
+def osm_names(tags: dict) -> list[str]:
+    """All distinct names of a place (alt_name may hold several, separated by ';')."""
+    out: list[str] = []
+    for key in NAME_TAGS:
+        for part in str(tags.get(key) or "").split(";"):
+            part = part.strip()
+            if part and part not in out:
+                out.append(part)
+    return out
 
 # ---------------------------------------------------------------------------
 # OpenStreetMap via Overpass
 # ---------------------------------------------------------------------------
 
 OVERPASS_QUERY = """
-[out:json][timeout:180];
+[out:json][timeout:240];
 (
   nwr["tourism"~"^(attraction|museum|gallery|viewpoint|zoo|aquarium|theme_park)$"]["name"]({bbox});
   nwr["amenity"~"^(theatre|arts_centre|restaurant|cafe|bar|pub)$"]["name"]({bbox});
   nwr["leisure"~"^(park|garden)$"]["name"]({bbox});
   nwr["historic"]["name"]({bbox});
+  nwr["amenity"="place_of_worship"]["name"]["wikidata"]({bbox});
 );
 out center tags;
 """
+# Shrines, temples, cathedrals: only ones with a Wikidata entry (notable ones), otherwise
+# every small neighborhood church/shrine would flood the list. Meiji Shrine and Senso-ji
+# are tagged place_of_worship, not tourism, so without this line they were never downloaded.
 
 
 def fetch_osm(city: City) -> Path:
+    import time
+
     import requests
 
     bbox = ",".join(str(x) for x in city.bbox)  # south,west,north,east
-    resp = requests.post(
-        OVERPASS_URL,
-        data={"data": OVERPASS_QUERY.format(bbox=bbox)},
-        headers={"User-Agent": "zoba-csds395/0.1 (student project)"},
-        timeout=300,
-    )
-    resp.raise_for_status()
-    path = raw_dir(city.city_id) / "osm.json"
-    path.write_text(resp.text)
-    return path
+    errors = []
+    for attempt in range(2):  # two passes over all servers
+        for url in OVERPASS_URLS:
+            try:
+                resp = requests.post(
+                    url,
+                    data={"data": OVERPASS_QUERY.format(bbox=bbox)},
+                    headers={"User-Agent": "zoba-csds395/0.1 (student project)"},
+                    timeout=300,
+                )
+                resp.raise_for_status()
+                json.loads(resp.text)  # busy servers sometimes return an HTML error page with 200
+            except (requests.RequestException, ValueError) as exc:
+                errors.append(f"{url}: {exc}")
+                print(f"  OSM server failed, trying next: {url} ({type(exc).__name__})")
+                continue
+            path = raw_dir(city.city_id) / "osm.json"
+            path.write_text(resp.text)
+            return path
+        if attempt == 0:
+            print("  all OSM servers busy, waiting 30 s and retrying...")
+            time.sleep(30)
+    raise SystemExit("All Overpass servers failed. Try again in a few minutes.\n  " + "\n  ".join(errors))
 
 
 def normalize_osm(path: Path) -> list[dict]:
@@ -63,6 +99,8 @@ def normalize_osm(path: Path) -> list[dict]:
                 "source": "osm",
                 "source_id": f"{el['type'][0]}{el['id']}",  # n123 / w456 / r789
                 "name": tags.get("name"),
+                "name_en": tags.get("name:en"),
+                "alt_names": osm_names(tags)[1:],
                 "lat": lat,
                 "lon": lon,
                 "category": categories.from_osm_tags(tags),
@@ -96,11 +134,19 @@ WHERE latitude BETWEEN ? AND ?
 def fetch_fsq(city: City, parquet_path: str = FSQ_PLACES_PATH) -> Path:
     import duckdb
 
+    import os
+
     if not parquet_path:
-        raise SystemExit("Set FSQ_PLACES_PATH to the Foursquare OS Places parquet (local path or s3:// glob).")
+        raise SystemExit("Set FSQ_PLACES_PATH to the Foursquare OS Places parquet "
+                         "(local file/glob, or hf://datasets/foursquare/fsq-os-places/...).")
     con = duckdb.connect()
-    if parquet_path.startswith("s3://"):
+    if "://" in parquet_path:  # remote: hf:// or s3://
         con.execute("INSTALL httpfs; LOAD httpfs;")
+        if parquet_path.startswith("hf://"):
+            token = os.environ.get("HF_TOKEN")
+            if not token:
+                raise SystemExit("Set HF_TOKEN to your Hugging Face access token (the dataset is gated).")
+            con.execute(f"CREATE SECRET hf (TYPE HUGGINGFACE, TOKEN '{token}')")
     s, w, n, e = city.bbox
     df = con.execute(FSQ_SQL, [parquet_path, s, n, w, e]).df()
     path = raw_dir(city.city_id) / "fsq.parquet"
@@ -112,6 +158,8 @@ def normalize_fsq(path: Path) -> list[dict]:
     import pandas as pd
 
     df = pd.read_parquet(path)
+    # Missing values come back as NaN/NA; turn them into None so string checks work.
+    df = df.astype(object).where(df.notna(), None)
     out = []
     for r in df.itertuples(index=False):
         labels = list(r.fsq_category_labels) if r.fsq_category_labels is not None else []

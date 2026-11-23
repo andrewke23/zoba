@@ -10,8 +10,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_trip_for_member, require_trip_organizer
 from app.core.database import get_session
 from app.core.security import get_current_user_id
-from app.models.entities import City, Membership, MembershipRole, MembershipStatus, Trip, User
-from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead, TripSummaryRead
+from app.models.entities import (
+    City,
+    Comparison,
+    Membership,
+    MembershipRole,
+    MembershipStatus,
+    PreferenceSubmission,
+    Trip,
+    User,
+)
+from app.schemas.trips import MemberCreate, MemberRead, TripCreate, TripRead, TripSummaryRead, TripUpdate
 from app.services.embedder import describe_trip, record_input_embedding
 
 router = APIRouter(prefix="/trips")
@@ -124,6 +133,52 @@ async def read_trip(
     return await trip_read(session, trip)
 
 
+@router.put("/{trip_id}", response_model=TripRead)
+async def update_trip(
+    payload: TripUpdate,
+    trip_and_membership: tuple[Trip, Membership] = Depends(require_trip_organizer),
+    session: AsyncSession = Depends(get_session),
+) -> TripRead:
+    trip, _ = trip_and_membership
+
+    if payload.city_id is not None:
+        city_name = await session.scalar(select(City.name).where(City.city_id == payload.city_id))
+        if city_name is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unknown city_id")
+        trip.city_id = payload.city_id
+    if payload.name is not None:
+        trip.name = payload.name
+    if payload.start_date is not None:
+        trip.start_date = payload.start_date
+    if payload.end_date is not None:
+        trip.end_date = payload.end_date
+    if payload.daily_start_time is not None:
+        trip.daily_start_time = payload.daily_start_time
+    if payload.daily_end_time is not None:
+        trip.daily_end_time = payload.daily_end_time
+    if payload.home_base_label is not None:
+        trip.home_base_label = payload.home_base_label
+    if payload.home_base_lat is not None and payload.home_base_lon is not None:
+        trip.home_base = WKTElement(
+            f"POINT({payload.home_base_lon} {payload.home_base_lat})",
+            srid=4326,
+        )
+
+    if trip.end_date < trip.start_date:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="end_date must be on or after start_date",
+        )
+    if trip.daily_end_time <= trip.daily_start_time:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="daily_end_time must be after daily_start_time",
+        )
+
+    await session.commit()
+    return await trip_read(session, trip)
+
+
 @router.get("/{trip_id}/members", response_model=list[MemberRead])
 async def list_members(
     trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
@@ -138,7 +193,50 @@ async def list_members(
             .order_by(Membership.role, User.name)
         )
     ).all()
-    return [member_read(membership, user) for membership, user in rows]
+    submitted = set(
+        (
+            await session.scalars(
+                select(PreferenceSubmission.user_id).where(PreferenceSubmission.trip_id == trip.id)
+            )
+        ).all()
+    )
+    comparisons_done = dict(
+        (
+            await session.execute(
+                select(Comparison.user_id, func.count())
+                .where(Comparison.trip_id == trip.id)
+                .group_by(Comparison.user_id)
+            )
+        ).all()
+    )
+    return [
+        member_read(membership, user).model_copy(
+            update={
+                "preferences_submitted": membership.user_id in submitted,
+                "comparisons_done": comparisons_done.get(membership.user_id, 0),
+            }
+        )
+        for membership, user in rows
+    ]
+
+
+@router.delete("/{trip_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_member(
+    user_id: UUID,
+    trip_and_membership: tuple[Trip, Membership] = Depends(require_trip_organizer),
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Remove a member from the trip. The organizer cannot be removed."""
+    trip, _ = trip_and_membership
+    if user_id == trip.organizer_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="The organizer cannot be removed")
+
+    membership = await session.get(Membership, (trip.id, user_id))
+    if membership is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Member not found")
+
+    membership.status = MembershipStatus.LEFT
+    await session.commit()
 
 
 @router.post(

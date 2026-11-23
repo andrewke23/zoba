@@ -64,3 +64,12 @@ def test_partial_and_unparseable():
 def test_rows_shape():
     rows = parse_opening_hours("Sa 10:00-14:00").rows()
     assert rows == [(5, 600, 840)]
+
+
+def test_odd_day_ranges_never_crash():
+    # Montreal's data had a "Mo-We-Fr"-style range that crashed the whole city's run.
+    p = parse_opening_hours("Mo-We-Fr 10:00-18:00")
+    assert p.status in ("partial", "unparseable")
+    for raw in ["Mo-Tu-We 09:00-17:00; Sa 10:00-12:00", "Mo--Fr 9-5", "-", ";;;", "Mo-Fr 25:99-30:00", "Su-", "PH-SH off"]:
+        assert parse_opening_hours(raw).status in ("ok", "partial", "unparseable", "missing")
+    assert parse_opening_hours("Mo-Tu-We 09:00-17:00; Sa 10:00-12:00").windows[5] == [(600, 720)]

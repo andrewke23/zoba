@@ -4,14 +4,13 @@
 //   hybrid  — default: real backend where it exists, mock elsewhere
 //   real    — everything must be real; unimplemented endpoints fail with 501
 //
-// The real backend currently covers auth, cities, trips, invites/members,
-// expenses, settlement, and the cost estimate. Preferences, comparisons,
-// group results, itinerary/solvers, tasks, and packing are still mock-only
-// (see src/api/http.ts), so hybrid keeps the whole app usable meanwhile.
+// The real backend covers everything except correctDuration (fixing a visit's
+// estimated length), which is still mock-only (see src/api/http.ts). Hybrid
+// mode serves that one from the mock, against the backend's real places.
 import { realApi } from './http'
 import { hybridBridge, mockApi } from './mock'
 import { ApiError } from './types'
-import type { Member, Trip, UUID, ZobaApi } from './types'
+import type { Destination, Member, Trip, UUID, ZobaApi } from './types'
 
 export type ApiMode = 'mock' | 'hybrid' | 'real'
 
@@ -37,27 +36,43 @@ function rejectUnimplemented(base: Partial<ZobaApi>): ZobaApi {
   return out as unknown as ZobaApi
 }
 
-// Voting progress (preferences/comparisons) is mock-owned until the backend
-// grows a preferences domain; membership itself is real. Merge the two so the
-// overview and preferences pages get correct flags either way.
-async function listMembersWithVotingProgress(tripId: UUID): Promise<Member[]> {
+// Membership is mirrored into the mock so the mock-served method can check it.
+async function listMembersMirrored(tripId: UUID): Promise<Member[]> {
   const members = await realApi.listMembers!(tripId)
   hybridBridge.members(tripId, members)
-  let progress = new Map<UUID, Pick<Member, 'preferences_submitted' | 'comparisons_done'>>()
-  try {
-    const mockMembers = await mockApi.listMembers(tripId)
-    progress = new Map(
-      mockMembers.map((m) => [m.user_id, { preferences_submitted: m.preferences_submitted, comparisons_done: m.comparisons_done }]),
-    )
-  } catch {
-    // Trip isn't in the mock database — no demo voting data to merge in.
-  }
-  return members.map((m) => ({ ...m, ...progress.get(m.user_id) }))
+  return members
 }
 
 function mirrorTrip(trip: Trip): Trip {
   hybridBridge.trip(trip)
   return trip
+}
+
+// The mock only knows the places in its own catalog (demo Chicago). Before a
+// mock-served method runs, copy the trip city's real places in, once per trip
+// per page load, so it works for every city and uses real IDs.
+const destinationSync = new Map<UUID, Promise<Destination[]>>()
+
+function realDestinations(tripId: UUID): Promise<Destination[]> {
+  let pending = destinationSync.get(tripId)
+  if (!pending) {
+    pending = realApi.listDestinations!(tripId).then((destinations) => {
+      hybridBridge.destinations(destinations)
+      return destinations
+    })
+    // A failed fetch shouldn't stick: let the next call retry.
+    pending.catch(() => destinationSync.delete(tripId))
+    destinationSync.set(tripId, pending)
+  }
+  return pending
+}
+
+/** Wrap a mock-served method so it runs against the trip's real places. */
+function withRealDestinations<A extends unknown[], R>(fn: (tripId: UUID, ...args: A) => Promise<R>) {
+  return async (tripId: UUID, ...args: A): Promise<R> => {
+    await realDestinations(tripId)
+    return fn(tripId, ...args)
+  }
 }
 
 // Sign-in and trips are real; each result is mirrored into the mock so the
@@ -89,7 +104,9 @@ const hybridApi: ZobaApi = {
   createTrip: async (input) => mirrorTrip(await realApi.createTrip!(input)),
   updateTrip: async (tripId, input) => mirrorTrip(await realApi.updateTrip!(tripId, input)),
   joinTrip: async (token) => mirrorTrip(await realApi.joinTrip!(token)),
-  listMembers: listMembersWithVotingProgress,
+  listMembers: listMembersMirrored,
+  listDestinations: realDestinations,
+  correctDuration: withRealDestinations(mockApi.correctDuration),
 }
 
 export const api: ZobaApi = mode === 'mock' ? mockApi : mode === 'real' ? rejectUnimplemented(realApi) : hybridApi

@@ -41,8 +41,8 @@ export default function RegisterPage() {
         <Field label="Email">
           <Input type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} />
         </Field>
-        <Field label="Password">
-          <Input type="password" autoComplete="new-password" required minLength={4} value={password} onChange={(e) => setPassword(e.target.value)} />
+        <Field label="Password" hint="At least 8 characters.">
+          <Input type="password" autoComplete="new-password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} />
         </Field>
         <Button type="submit" className="w-full" loading={pending}>
           Create account

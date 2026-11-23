@@ -13,6 +13,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     Numeric,
     SmallInteger,
@@ -132,6 +133,97 @@ class ItineraryStop(Base):
     start_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     locked: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+
+
+class Preference(Base):
+    """One member's points, rank, or veto for one destination (F07a, F08)."""
+
+    __tablename__ = "preference"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["trip_id", "user_id"], ["membership.trip_id", "membership.user_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint("points >= 0"),
+        CheckConstraint("rank >= 1"),
+    )
+
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    destination_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid, ForeignKey("destination.destination_id"), primary_key=True
+    )
+    points: Mapped[int | None] = mapped_column(Integer)
+    rank: Mapped[int | None] = mapped_column(Integer)
+    hard_no: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+
+
+class PreferenceSubmission(Base):
+    """Marks that a member has submitted preferences, even when they gave no points.
+
+    App table, created by the backend at startup on old volumes.
+    """
+
+    __tablename__ = "preference_submission"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["trip_id", "user_id"], ["membership.trip_id", "membership.user_id"], ondelete="CASCADE"
+        ),
+    )
+
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    submitted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=text("now()")
+    )
+
+
+class Comparison(Base):
+    """One this-or-that choice (F03)."""
+
+    __tablename__ = "comparison"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["trip_id", "user_id"], ["membership.trip_id", "membership.user_id"], ondelete="CASCADE"
+        ),
+        CheckConstraint("dest_a <> dest_b AND chosen IN (dest_a, dest_b)"),
+    )
+
+    id: Mapped[int] = mapped_column("comparison_id", BigInteger, primary_key=True, autoincrement=True)
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    dest_a: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("destination.destination_id"), nullable=False)
+    dest_b: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("destination.destination_id"), nullable=False)
+    chosen: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("destination.destination_id"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class Task(Base):
+    """A trip prep to-do (F15)."""
+
+    __tablename__ = "task"
+    __table_args__ = (CheckConstraint("status IN ('open','done')"),)
+
+    id: Mapped[uuid.UUID] = mapped_column("task_id", Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("trip.trip_id", ondelete="CASCADE"), nullable=False)
+    title: Mapped[str] = mapped_column(String, nullable=False)
+    due_date: Mapped[date | None] = mapped_column(Date)
+    status: Mapped[str] = mapped_column(String, nullable=False, server_default=text("'open'"))
+
+
+class PackingItem(Base):
+    """A shared packing list entry. App table, created by the backend at startup on old volumes."""
+
+    __tablename__ = "packing_item"
+
+    id: Mapped[uuid.UUID] = mapped_column("item_id", Uuid, primary_key=True, server_default=text("gen_random_uuid()"))
+    trip_id: Mapped[uuid.UUID] = mapped_column(Uuid, ForeignKey("trip.trip_id", ondelete="CASCADE"), nullable=False)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    packed: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    # NULL means everyone brings their own.
+    assignee_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("app_user.user_id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
 class Expense(Base):

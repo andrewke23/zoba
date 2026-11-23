@@ -6,6 +6,25 @@ import type { City, TripInput } from '../api'
 import { Button, ErrorBox, Field, Input, Select } from './ui'
 
 const STYLE_URL = import.meta.env.VITE_MAP_STYLE_URL ?? 'https://tiles.openfreemap.org/styles/liberty'
+const GEOCODER_URL = import.meta.env.VITE_GEOCODER_URL ?? 'https://nominatim.openstreetmap.org/reverse'
+
+interface NominatimPlace {
+  name?: string
+  display_name?: string
+  address?: Record<string, string>
+}
+
+/** Reverse-geocode a point to a short label like "Hotel — 151 E Wacker Dr". */
+async function reverseGeocode(lat: number, lng: number, signal: AbortSignal): Promise<string | null> {
+  const url = `${GEOCODER_URL}?format=jsonv2&zoom=18&lat=${lat}&lon=${lng}`
+  const res = await fetch(url, { signal, headers: { Accept: 'application/json' } })
+  if (!res.ok) return null
+  const place: NominatimPlace = await res.json()
+  const a = place.address ?? {}
+  const street = [a.house_number, a.road].filter(Boolean).join(' ')
+  if (place.name && street) return `${place.name} — ${street}`
+  return place.name || street || place.display_name?.split(',').slice(0, 2).join(',').trim() || null
+}
 
 interface Props {
   cities: City[]
@@ -32,7 +51,29 @@ export default function TripForm({ cities, initial, submitLabel, onSubmit }: Pro
   )
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
+  const [locating, setLocating] = useState(false)
+  const lookup = useRef<AbortController | null>(null)
   const set = <K extends keyof TripInput>(k: K, v: TripInput[K]) => setForm((f) => ({ ...f, [k]: v }))
+
+  useEffect(() => () => lookup.current?.abort(), [])
+
+  // Moving the pin fills the home-base label with the address under it; a newer
+  // tap cancels any lookup still in flight so stale answers never win.
+  async function placeHomeBase(lat: number, lng: number) {
+    setForm((f) => ({ ...f, home_base: { ...f.home_base, lat, lng } }))
+    lookup.current?.abort()
+    const ctrl = new AbortController()
+    lookup.current = ctrl
+    setLocating(true)
+    try {
+      const label = await reverseGeocode(lat, lng, ctrl.signal)
+      if (label) setForm((f) => ({ ...f, home_base: { ...f.home_base, label } }))
+    } catch {
+      // Offline or rate-limited: keep whatever the user typed.
+    } finally {
+      if (lookup.current === ctrl) setLocating(false)
+    }
+  }
 
   function changeCity(city_id: string) {
     const c = cities.find((x) => x.city_id === city_id)
@@ -91,14 +132,13 @@ export default function TripForm({ cities, initial, submitLabel, onSubmit }: Pro
           value={form.home_base.label}
           onChange={(e) => set('home_base', { ...form.home_base, label: e.target.value })}
         />
-        <p className="text-xs text-stone-500">Tap the map to place your home base. Every day starts and ends here.</p>
-        <HomeBasePicker
-          lat={form.home_base.lat}
-          lng={form.home_base.lng}
-          onChange={(lat, lng) => setForm((f) => ({ ...f, home_base: { ...f.home_base, lat, lng } }))}
-        />
+        <p className="text-xs text-stone-500">
+          Tap the map to place your home base and fill in its address. Every day starts and ends here.
+        </p>
+        <HomeBasePicker lat={form.home_base.lat} lng={form.home_base.lng} onChange={placeHomeBase} />
         <p className="text-xs text-stone-400">
           {form.home_base.lat.toFixed(5)}, {form.home_base.lng.toFixed(5)}
+          {locating && ' · Looking up address…'}
         </p>
       </fieldset>
       <Button type="submit" className="w-full sm:w-auto" loading={pending}>

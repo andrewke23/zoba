@@ -36,6 +36,31 @@ _INPUT_EMBEDDING_DDL = (
     "CREATE INDEX IF NOT EXISTS input_embedding_user_idx ON input_embedding (user_id)",
 )
 
+# Mirror preference_submission and packing_item in data-pipeline/db/schema.sql
+# for volumes created before those tables existed.
+_APP_TABLES_DDL = (
+    """
+    CREATE TABLE IF NOT EXISTS preference_submission (
+        trip_id      UUID NOT NULL,
+        user_id      UUID NOT NULL,
+        submitted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (trip_id, user_id),
+        FOREIGN KEY (trip_id, user_id) REFERENCES membership(trip_id, user_id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS packing_item (
+        item_id     UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        trip_id     UUID NOT NULL REFERENCES trip(trip_id) ON DELETE CASCADE,
+        label       TEXT NOT NULL,
+        packed      BOOLEAN NOT NULL DEFAULT FALSE,
+        assignee_id UUID REFERENCES app_user(user_id) ON DELETE SET NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS packing_item_trip_idx ON packing_item (trip_id)",
+)
+
 
 async def _apply_startup_migrations() -> None:
     """Run additive schema fixes.
@@ -65,7 +90,7 @@ async def _apply_startup_migrations() -> None:
                         text("UPDATE trip SET invite_token = :token WHERE trip_id = :trip_id"),
                         {"token": secrets.token_urlsafe(18), "trip_id": trip_id},
                     )
-                for statement in _INPUT_EMBEDDING_DDL:
+                for statement in (*_INPUT_EMBEDDING_DDL, *_APP_TABLES_DDL):
                     await connection.execute(text(statement))
             return
         except DBAPIError:

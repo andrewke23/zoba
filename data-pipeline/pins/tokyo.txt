@@ -1,0 +1,9 @@
+# Must-see places for Tokyo: always in the shortlist.
+# One name per line, English or Japanese (exact name; accents and capitals don't matter).
+# Start a line with - to always exclude a place.
+Senso-ji
+Meiji Jingu Main Shrine
+Tokyo Skytree
+Tokyo Tower
+Tokyo National Museum
+Shibuya Sky

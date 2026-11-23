@@ -596,7 +596,7 @@ function progress(tripId: UUID) {
 // Hybrid-mode bridge
 // ---------------------------------------------------------------------------
 // In hybrid mode, accounts, trips and members live on the backend, but the
-// domains this mock still serves (voting, itinerary, tasks, packing) check the
+// method this mock still serves (correctDuration) checks the
 // mock's own session and membership tables. Mirroring the real records in
 // keeps those pages working on real trips instead of failing with "Please log in."
 
@@ -631,6 +631,18 @@ export const hybridBridge = {
       const index = db.trips.findIndex((t) => t.trip_id === trip.trip_id)
       if (index >= 0) db.trips[index] = clone(trip)
       else db.trips.push(clone(trip))
+    })
+  },
+  /**
+   * Replace the mock catalog for these cities with the backend's places, so the
+   * mock-served voting pages (preferences, compare, results) offer the same
+   * places and IDs the real itinerary generator reads.
+   */
+  destinations(destinations: Destination[]) {
+    if (destinations.length === 0) return
+    sync(() => {
+      const cities = new Set(destinations.map((d) => d.city_id))
+      db.destinations = [...db.destinations.filter((d) => !cities.has(d.city_id)), ...clone(destinations)]
     })
   },
   members(tripId: UUID, members: Member[]) {

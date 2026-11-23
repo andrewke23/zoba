@@ -147,6 +147,27 @@ CREATE TABLE IF NOT EXISTS task (
     status          TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done'))
 );
 
+-- App table (backend startup migration on old volumes): a member has submitted
+-- preferences, even if every destination got zero points.
+CREATE TABLE IF NOT EXISTS preference_submission (
+    trip_id         UUID NOT NULL,
+    user_id         UUID NOT NULL,
+    submitted_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (trip_id, user_id),
+    FOREIGN KEY (trip_id, user_id) REFERENCES membership(trip_id, user_id) ON DELETE CASCADE
+);
+
+-- App table (backend startup migration on old volumes): shared packing list.
+CREATE TABLE IF NOT EXISTS packing_item (
+    item_id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    trip_id         UUID NOT NULL REFERENCES trip(trip_id) ON DELETE CASCADE,
+    label           TEXT NOT NULL,
+    packed          BOOLEAN NOT NULL DEFAULT FALSE,
+    assignee_id     UUID REFERENCES app_user(user_id) ON DELETE SET NULL,  -- NULL = everyone brings their own
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS packing_item_trip_idx ON packing_item (trip_id);
+
 CREATE TABLE IF NOT EXISTS expense (
     expense_id      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     trip_id         UUID NOT NULL REFERENCES trip(trip_id) ON DELETE CASCADE,

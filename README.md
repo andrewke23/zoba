@@ -10,9 +10,9 @@ for local setup, API contracts, and authentication configuration.
 ## Frontend
 
 The React app in `frontend/` runs against the backend in **hybrid mode** by
-default: accounts, trips, members, invites, expenses, settlement and the cost
-estimate are served by the FastAPI backend, while voting, itinerary, tasks and
-packing still use the in-browser mock until those backend domains exist. See
+default: accounts, trips, members, invites, voting, itinerary, tasks, packing,
+expenses, settlement and the cost estimate are served by the FastAPI backend;
+only visit-duration corrections still use the in-browser mock. See
 [frontend/README.md](frontend/README.md) for setup, API modes, and the demo.
 
 ```powershell
