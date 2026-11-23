@@ -18,6 +18,7 @@ from app.api.dependencies import get_trip_for_member
 from app.core.database import get_session
 from app.models.entities import (
     Comparison,
+    InputEmbedding,
     Membership,
     MembershipStatus,
     Preference,
@@ -253,7 +254,34 @@ async def submit_comparison(
     await session.commit()
     return await _progress(session, trip, membership.user_id)
 
+@router.delete("/comparisons/last", response_model=ComparisonProgressRead)
+async def undo_last_comparison(
+    access: tuple[Trip, Membership] = Depends(get_trip_for_member),
+    session: AsyncSession = Depends(get_session),
+) -> ComparisonProgressRead:
+    """Remove the caller's most recent comparison, so a misclick can be undone."""
+    trip, membership = access
+    last = await session.scalar(
+        select(Comparison)
+        .where(Comparison.trip_id == trip.id, Comparison.user_id == membership.user_id)
+        .order_by(Comparison.id.desc())
+        .limit(1)
+    )
+    if last is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No comparisons to undo.")
 
+    await session.execute(
+        delete(InputEmbedding).where(
+            InputEmbedding.input_kind == "comparison",
+            InputEmbedding.trip_id == trip.id,
+            InputEmbedding.user_id == membership.user_id,
+            InputEmbedding.source_id == str(last.id),
+        )
+    )
+    await session.delete(last)
+    await session.commit()
+    return await _progress(session, trip, membership.user_id)
+    
 @router.get("/group-results", response_model=GroupResultsRead)
 async def read_group_results(
     access: tuple[Trip, Membership] = Depends(get_trip_for_member),

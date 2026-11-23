@@ -24,6 +24,12 @@ export default function ComparePage() {
     if (progress.done === progress.target) void reloadTrip()
   })
 
+  const undo = useAction(async () => {
+    if (!data) return
+    const progress = await api.undoLastComparison(trip.trip_id)
+    setData({ ...data, progress })
+  })
+
   const pick = useCallback(
     (side: 'a' | 'b') => {
       const next = data?.progress.next
@@ -56,15 +62,29 @@ export default function ComparePage() {
     <div>
       <PageHeader title="This or that?" subtitle="Tap the place you'd rather visit. Each answer helps Zoba pick the next most useful question." />
 
-      <div className="mb-5">
-        <div className="mb-1 flex justify-between text-sm">
+            <div className="mb-5">
+        <div className="mb-1 flex items-center justify-between text-sm">
           <span className="font-medium text-stone-800">
             {done} / {target} comparisons
           </span>
-          {finished && <Badge tone="success">Minimum reached</Badge>}
+          <div className="flex items-center gap-2">
+            {finished && <Badge tone="success">Minimum reached</Badge>}
+            {done > 0 && (
+              <button
+                type="button"
+                onClick={() => void undo.run()}
+                disabled={undo.pending || choose.pending}
+                className="text-xs font-medium text-stone-500 underline hover:text-stone-700 disabled:opacity-50"
+              >
+                Undo last
+              </button>
+            )}
+          </div>
         </div>
         <ProgressBar value={Math.min(done, target)} max={target} />
       </div>
+
+      <ErrorBox error={undo.error} />
 
       {finished && (
         <div className="mb-5 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">

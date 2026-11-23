@@ -322,6 +322,7 @@ export const realApi: Partial<ZobaApi> = {
   getComparisonProgress: (id) => req<ComparisonProgress>('GET', `${t(id)}/comparisons/progress`),
   submitComparison: (id, pair, chosen) =>
     req<ComparisonProgress>('POST', `${t(id)}/comparisons`, { ...pair, chosen }),
+  undoLastComparison: (id) => req<ComparisonProgress>('DELETE', `${t(id)}/comparisons/last`),
   getGroupResults: (id) => req<GroupResults>('GET', `${t(id)}/group-results`),
 
   // Expenses, settlement, cost estimate ------------------------------------

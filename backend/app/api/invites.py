@@ -54,7 +54,9 @@ async def join_via_invite(
 
     membership = await session.get(Membership, (trip.id, user_id))
     if membership is not None:
-        if membership.status == MembershipStatus.INVITED:
+        if membership.status != MembershipStatus.JOINED:
+            if await count_joined_members(session, trip.id) >= MAX_TRIP_MEMBERS:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Trip is full")
             membership.status = MembershipStatus.JOINED
             await session.commit()
         return MemberRead(
