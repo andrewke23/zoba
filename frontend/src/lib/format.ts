@@ -29,6 +29,12 @@ export function usd(n: number, digits = 0) {
 
 export const cents = (c: number) => usd(c / 100, 2)
 
+/** Admission cost for display: null means we don't have the data, 0 means it's actually free. */
+export function costLabel(admissionCostUsd: number | null) {
+  if (admissionCostUsd == null) return 'Price unknown'
+  return admissionCostUsd === 0 ? 'Free' : usd(admissionCostUsd)
+}
+
 export function formatDate(d: ISODate, opts: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' }) {
   return new Date(`${d}T12:00:00`).toLocaleDateString('en-US', opts)
 }
