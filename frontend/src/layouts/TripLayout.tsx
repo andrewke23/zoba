@@ -53,7 +53,7 @@ export default function TripLayout() {
     const [trip, members, cities] = await Promise.all([api.getTrip(tripId), api.listMembers(tripId), api.listCities()])
     return { trip, members, cities }
   }, [tripId])
-  const { data, error, reload } = state
+  const { data, error, reload, loading } = state
 
   const memberName = useCallback(
     (id: UUID) => data?.members.find((m) => m.user_id === id)?.display_name ?? 'Former member',
@@ -78,7 +78,7 @@ export default function TripLayout() {
   if (error) {
     return (
       <div className="mx-auto max-w-xl px-4 py-10">
-        <ErrorBox error={error} onRetry={reload} />
+        {loading ? <Loading /> : <ErrorBox error={error} onRetry={reload} />}
         <Link to="/" className="mt-4 inline-block text-sm font-medium text-brand-700">
           ← Back to my trips
         </Link>
