@@ -13,6 +13,7 @@ how the two solvers diverge as the problem gets bigger.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -26,9 +27,9 @@ import psycopg  # noqa: E402
 from app.services.scheduler import (  # noqa: E402
     Candidate,
     OpeningWindow,
-    straight_line_estimator,
     visit_minutes,
 )
+from app.services.routing import build_estimator  # noqa: E402
 from app.services.solver_comparison import compare, format_table, improvement  # noqa: E402
 
 CANDIDATE_SQL = """
@@ -125,13 +126,16 @@ def main() -> None:
     with psycopg.connect(dsn) as conn:
         for limit in limits:
             candidates, days, trip = load(conn, args.trip_id, limit)
+            home = (float(trip["latitude"]), float(trip["longitude"]))
+            # Road-network times, fetched once per run from the configured OSRM servers.
+            travel = asyncio.run(build_estimator([home] + [c.location for c in candidates]))
             runs = compare(
                 candidates,
                 days=days,
                 day_start_minute=minutes(trip["day_start"]),
                 day_end_minute=minutes(trip["day_end"]),
-                home_base=(float(trip["latitude"]), float(trip["longitude"])),
-                travel=straight_line_estimator(),
+                home_base=home,
+                travel=travel,
                 time_limit_seconds=args.time_limit,
             )
             print(f"\n### {len(candidates)} candidates, {len(days)} days\n")

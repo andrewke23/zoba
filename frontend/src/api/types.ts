@@ -221,6 +221,20 @@ export interface Itinerary {
   metrics: SolverMetrics
 }
 
+/** One leg of a day as drawn on the map (the last leg of a day returns to the home base). */
+export interface RouteLeg {
+  day_index: number
+  seq: number
+  /** null = home base */
+  from_destination_id: UUID | null
+  /** null = home base */
+  to_destination_id: UUID | null
+  mode: TravelMode
+  minutes: number
+  /** [lng, lat] points along the street route; empty when no route exists */
+  coordinates: [number, number][]
+}
+
 export interface LockRequest {
   day_index: number
   start_ts: ISODateTime
@@ -341,6 +355,7 @@ export interface ZobaApi {
   setStopLock(tripId: UUID, destinationId: UUID, lock: LockRequest | null): Promise<Itinerary>
   correctDuration(tripId: UUID, destinationId: UUID, minutes: number): Promise<Destination>
   compareSolvers(tripId: UUID): Promise<SolverMetrics[]>
+  getItineraryRoutes(tripId: UUID): Promise<RouteLeg[]>
 
   // Prep (F15–F17)
   listTasks(tripId: UUID): Promise<Task[]>

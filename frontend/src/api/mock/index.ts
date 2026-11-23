@@ -7,6 +7,7 @@ import type {
   Itinerary,
   Member,
   Preference,
+  RouteLeg,
   SolverKind,
   SolverMetrics,
   Task,
@@ -15,7 +16,7 @@ import type {
   UUID,
   ZobaApi,
 } from '../types'
-import { PREF_CONFIG, balances, computeRanking, nextPair, schedule, settle, tripDates } from './algorithms'
+import { PREF_CONFIG, balances, computeRanking, nextPair, schedule, settle, travel, tripDates } from './algorithms'
 import { db, newId, persist, refresh } from './db'
 import { SEED_DESTINATIONS } from './seed'
 
@@ -182,6 +183,8 @@ function syncAutoTasks(it: Itinerary) {
 const MEAL_AVG_USD = 20
 const MEALS_PER_DAY = 3
 const TRANSIT_FARE_USD = 2.5
+/** A typical ~$15-20 urban cab ride split among the riders in one car. */
+const TAXI_FARE_PER_PERSON_USD = 6
 
 function costEstimate(tripId: UUID): CostEstimate {
   const it = db.itineraries.find((x) => x.trip_id === tripId)
@@ -193,6 +196,7 @@ function costEstimate(tripId: UUID): CostEstimate {
   let foodStops = 0
   let foodCost = 0
   let transit = 0
+  let taxi = 0
   for (const s of stops) {
     const d = destOf(s.destination_id)
     if (d.category === 'food') {
@@ -200,10 +204,11 @@ function costEstimate(tripId: UUID): CostEstimate {
       foodCost += d.admission_cost_usd ?? MEAL_AVG_USD
     } else admission += d.admission_cost_usd ?? 0
     if (s.travel_mode_from_prev === 'transit') transit++
+    else if (s.travel_mode_from_prev === 'drive') taxi++
   }
   if (stops.length) transit++ // ride back to home base at the end of the day (approx.)
   const meals = foodCost + Math.max(0, days * MEALS_PER_DAY - foodStops) * MEAL_AVG_USD
-  const transport = transit * TRANSIT_FARE_USD
+  const transport = transit * TRANSIT_FARE_USD + taxi * TAXI_FARE_PER_PERSON_USD
   return {
     per_member: joinedIds(tripId).map((user_id) => ({
       user_id,
@@ -215,7 +220,7 @@ function costEstimate(tripId: UUID): CostEstimate {
     assumptions: [
       it ? `Based on the current itinerary (${stops.length} stops over ${days} days).` : 'No itinerary yet — only meals are estimated.',
       `Meals not covered by a scheduled restaurant use a category average of $${MEAL_AVG_USD}, ${MEALS_PER_DAY} per day.`,
-      `Transit legs use a flat $${TRANSIT_FARE_USD.toFixed(2)} fare; walking legs are free.`,
+      `Transit legs use a flat $${TRANSIT_FARE_USD.toFixed(2)} fare, taxi legs $${TAXI_FARE_PER_PERSON_USD} per person (shared cab); walking legs are free.`,
       'Unknown admission prices count as $0.',
     ],
   }
@@ -471,6 +476,44 @@ export const mockApi: ZobaApi = {
       ;(db.durationCorrections[destinationId] ??= []).push(minutes)
       d.est_duration_min = currentDuration(destinationId)
       return d
+    }),
+
+  // Demo mode has no routing server, so each leg is a straight segment. The
+  // real backend returns street paths from OSRM.
+  getItineraryRoutes: (tripId) =>
+    respond(() => {
+      membership(tripId)
+      const it = db.itineraries.find((x) => x.trip_id === tripId)
+      if (!it) return []
+      const home = trip(tripId).home_base
+      const at = (id: UUID | null) => {
+        const d = id ? db.destinations.find((x) => x.destination_id === id) : null
+        return d ? { lat: d.lat, lng: d.lng } : { lat: home.lat, lng: home.lng }
+      }
+      const legs: RouteLeg[] = []
+      for (const day of it.days) {
+        const ids: (UUID | null)[] = [null, ...day.stops.map((s) => s.destination_id), null]
+        if (ids.length === 2) continue
+        for (let i = 1; i < ids.length; i++) {
+          const a = at(ids[i - 1])
+          const b = at(ids[i])
+          const stop = day.stops[i - 1]
+          const leg = stop ? { min: stop.travel_min_from_prev, mode: stop.travel_mode_from_prev } : travel(a, b)
+          legs.push({
+            day_index: day.day_index,
+            seq: i - 1,
+            from_destination_id: ids[i - 1],
+            to_destination_id: ids[i],
+            mode: leg.mode,
+            minutes: leg.min,
+            coordinates: [
+              [a.lng, a.lat],
+              [b.lng, b.lat],
+            ],
+          })
+        }
+      }
+      return legs
     }),
 
   compareSolvers: (tripId) =>

@@ -87,3 +87,10 @@ class CostEstimateRead(BaseModel):
     priced_stop_count: int
     unpriced_stop_count: int
     is_complete: bool
+    # Fares for the itinerary's transit and taxi legs (walking is free).
+    # per_person_total above is admission only.
+    transport_per_person: Money
+    transit_leg_count: int
+    taxi_leg_count: int
+    transit_fare: Money
+    taxi_fare_per_person: Money

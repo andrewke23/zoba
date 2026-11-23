@@ -1,7 +1,7 @@
 // F09–F14: generate, view (map + timeline), lock, regenerate, correct durations.
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../../api'
-import type { Destination, Itinerary, ItineraryStop, SolverKind, UUID } from '../../api'
+import type { Destination, Itinerary, ItineraryStop, RouteLeg, SolverKind, UUID } from '../../api'
 import TripMap from '../../components/TripMap'
 import { Avatar, Badge, Button, Card, CardHeader, EmptyState, ErrorBox, Field, Input, Loading, Modal, Notice, PageHeader, Select } from '../../components/ui'
 import { cx } from '../../lib/cx'
@@ -10,6 +10,9 @@ import { useTrip } from '../../layouts/TripContext'
 import { CATEGORY_META, MODE_META, dayColor, formatDate, formatDuration, hoursSummary, timeOf } from '../../lib/format'
 
 const SOLVER_LABEL: Record<SolverKind, string> = { greedy: 'Fast (greedy)', cpsat: 'Optimized (OR-Tools)' }
+
+/** Retry schedule for route lines after a failure (past the backend's 30 s cool-off). */
+const ROUTE_RETRY_DELAYS_MS = [35_000, 60_000, 120_000]
 
 export default function ItineraryPage() {
   const { trip, isOrganizer, memberName } = useTrip()
@@ -36,6 +39,51 @@ export default function ItineraryPage() {
   }, [])
 
   const days = useMemo(() => data?.itinerary?.days ?? [], [data])
+
+  // Street routes for the map, refetched whenever the itinerary changes.
+  const [routes, setRoutes] = useState<RouteLeg[] | null>(null)
+  const [routesFailed, setRoutesFailed] = useState(false)
+  const routeKey = data?.itinerary
+    ? `${data.itinerary.generated_at}|${days.map((d) => d.stops.map((s) => `${s.destination_id}@${s.start_ts}`).join(',')).join(';')}`
+    : null
+  useEffect(() => {
+    setRoutesFailed(false)
+    if (!routeKey) {
+      setRoutes(null)
+      return
+    }
+    // Until the new shapes arrive, keep drawing the legs that didn't change
+    // (same day, same from → to) so a re-solve doesn't blank the whole map.
+    const current = new Set<string>()
+    for (const d of days) {
+      const ids = [null, ...d.stops.map((s) => s.destination_id), null]
+      for (let i = 1; i < ids.length; i++) current.add(`${d.day_index}|${ids[i - 1]}|${ids[i]}`)
+    }
+    setRoutes((prev) => prev?.filter((l) => current.has(`${l.day_index}|${l.from_destination_id}|${l.to_destination_id}`)) ?? null)
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = (attempt: number) =>
+      api.getItineraryRoutes(trip.trip_id).then(
+        (legs) => {
+          if (cancelled) return
+          setRoutes(legs)
+          setRoutesFailed(false)
+        },
+        () => {
+          if (cancelled) return
+          setRoutesFailed(true)
+          // The routing service may be rate-limiting us; it usually recovers within a minute.
+          if (attempt < ROUTE_RETRY_DELAYS_MS.length) timer = setTimeout(() => load(attempt + 1), ROUTE_RETRY_DELAYS_MS[attempt])
+        },
+      )
+    void load(0)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- routeKey captures the itinerary's shape
+  }, [routeKey, trip.trip_id])
 
   if (state.error) return <ErrorBox error={state.error} onRetry={state.reload} />
   if (!data) return <Loading />
@@ -119,8 +167,10 @@ export default function ItineraryPage() {
             homeBase={trip.home_base}
             selectedDay={day}
             highlighted={highlighted}
+            routes={routes}
             onSelectStop={onSelectStop}
           />
+          {routesFailed && <p className="mt-1 text-xs text-stone-500">Some route lines couldn't load (routing service busy). Retrying shortly; stops and times are unaffected.</p>}
         </div>
 
         <div className="space-y-4">

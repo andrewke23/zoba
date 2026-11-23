@@ -146,37 +146,16 @@ def haversine_km(origin: Coordinate, destination: Coordinate) -> float:
 
 
 def straight_line_estimator(speed_kmh: float = 4.5, detour_factor: float = 1.3) -> TravelEstimator:
-    """Travel-time estimator for when no routing matrix is available.
+    """Walking time from straight-line distance. For tests and offline experiments only.
 
-    Straight-line distance inflated by ``detour_factor`` to approximate real
-    street routing. This is the stand-in until OSRM is deployed and the
-    ``travel_time`` table is populated; it is good enough to keep the scheduler
-    honest about geography, and wrong enough that it should not ship to users.
+    The application never schedules with this: real itineraries use road-network
+    routes from ``app.services.routing``. It stays because solver tests need a
+    deterministic, network-free notion of "far apart".
     """
 
     def estimate(origin: Coordinate, destination: Coordinate) -> int:
         km = haversine_km(origin, destination) * detour_factor
         return max(1, round(km / speed_kmh * 60))
-
-    return estimate
-
-
-def matrix_estimator(
-    matrix: dict[tuple[UUID, UUID], int],
-    ids_by_location: dict[Coordinate, UUID],
-    fallback: TravelEstimator | None = None,
-) -> TravelEstimator:
-    """Estimator backed by cached ``travel_time`` rows, falling back when a pair is missing."""
-    backup = fallback or straight_line_estimator()
-
-    def estimate(origin: Coordinate, destination: Coordinate) -> int:
-        origin_id = ids_by_location.get(origin)
-        dest_id = ids_by_location.get(destination)
-        if origin_id is not None and dest_id is not None:
-            seconds = matrix.get((origin_id, dest_id))
-            if seconds is not None:
-                return max(1, round(seconds / 60))
-        return backup(origin, destination)
 
     return estimate
 
@@ -291,7 +270,7 @@ def schedule_trip(
     day_start_minute: int,
     day_end_minute: int,
     home_base: Coordinate,
-    travel: TravelEstimator | None = None,
+    travel: TravelEstimator,
     locked: Iterable[LockedStop] = (),
 ) -> Itinerary:
     """Build a feasible multi-day itinerary from scored candidates.
@@ -302,7 +281,7 @@ def schedule_trip(
         day_start_minute: when the group starts each day, from local midnight.
         day_end_minute: when the group stops each day.
         home_base: where each day starts (the hotel).
-        travel: travel-time estimator; defaults to straight-line walking.
+        travel: travel-time estimator (road-network routes in the app; see app.services.routing).
         locked: stops a member pinned, which anchor their day.
 
     Returns:
@@ -311,7 +290,7 @@ def schedule_trip(
     if day_end_minute <= day_start_minute:
         raise ValueError("day_end_minute must be after day_start_minute")
 
-    estimator = travel or straight_line_estimator()
+    estimator = travel
     pool = sorted(candidates, key=lambda c: (-c.score, c.name, str(c.destination_id)))
     locked_stops = sorted(locked, key=lambda s: (s.day_index, s.start_minute))
 

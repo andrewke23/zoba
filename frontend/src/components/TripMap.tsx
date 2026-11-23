@@ -1,7 +1,8 @@
-// MapLibre GL map of the itinerary (F13). Numbered markers per day + route lines.
+// MapLibre GL map of the itinerary (F13). Numbered markers per day + the street
+// route of every leg (walking dotted, taxi/transit solid), from the routing service.
 import { useEffect, useRef, useState } from 'react'
 import maplibregl from 'maplibre-gl'
-import type { Destination, HomeBase, ItineraryDay, UUID } from '../api'
+import type { Destination, HomeBase, ItineraryDay, RouteLeg, UUID } from '../api'
 import { dayColor } from '../lib/format'
 
 // Free vector tiles, no API key. Swap for a self-hosted style in production.
@@ -14,10 +15,15 @@ interface Props {
   /** null = show all days */
   selectedDay: number | null
   highlighted: UUID | null
+  /** Street paths per leg; null while loading or if routing is unavailable (no lines drawn). */
+  routes: RouteLeg[] | null
   onSelectStop?: (id: UUID) => void
 }
 
-export default function TripMap({ days, destinations, homeBase, selectedDay, highlighted, onSelectStop }: Props) {
+const RIDE_LAYER = 'routes-ride'
+const WALK_LAYER = 'routes-walk'
+
+export default function TripMap({ days, destinations, homeBase, selectedDay, highlighted, routes, onSelectStop }: Props) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<maplibregl.Map | null>(null)
   const markers = useRef<maplibregl.Marker[]>([])
@@ -68,13 +74,10 @@ export default function TripMap({ days, destinations, homeBase, selectedDay, hig
     home.title = homeBase.label
     markers.current.push(new maplibregl.Marker({ element: home }).setLngLat([homeBase.lng, homeBase.lat]).addTo(m))
 
-    const features: GeoJSON.Feature[] = []
     for (const day of visible) {
-      const coords: [number, number][] = [[homeBase.lng, homeBase.lat]]
       day.stops.forEach((s, i) => {
         const d = destinations.get(s.destination_id)
         if (!d) return
-        coords.push([d.lng, d.lat])
         bounds.extend([d.lng, d.lat])
         const el = document.createElement('button')
         el.type = 'button'
@@ -87,30 +90,46 @@ export default function TripMap({ days, destinations, homeBase, selectedDay, hig
         el.addEventListener('click', () => onSelectStop?.(s.destination_id))
         markers.current.push(new maplibregl.Marker({ element: el }).setLngLat([d.lng, d.lat]).addTo(m))
       })
-      coords.push([homeBase.lng, homeBase.lat])
-      features.push({
-        type: 'Feature',
-        properties: { color: dayColor(day.day_index) },
-        geometry: { type: 'LineString', coordinates: coords },
-      })
     }
+
+    const visibleDays = new Set(visible.map((d) => d.day_index))
+    const features: GeoJSON.Feature[] = (routes ?? [])
+      .filter((leg) => visibleDays.has(leg.day_index) && leg.coordinates.length >= 2)
+      .map((leg) => {
+        leg.coordinates.forEach((c) => bounds.extend(c))
+        return {
+          type: 'Feature',
+          properties: { color: dayColor(leg.day_index), mode: leg.mode },
+          geometry: { type: 'LineString', coordinates: leg.coordinates },
+        }
+      })
 
     const data: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features }
     const src = m.getSource('routes') as maplibregl.GeoJSONSource | undefined
     if (src) src.setData(data)
     else {
       m.addSource('routes', { type: 'geojson', data })
+      // Line dash patterns can't vary per feature, so walking and riding are two layers.
       m.addLayer({
-        id: 'routes',
+        id: RIDE_LAYER,
         type: 'line',
         source: 'routes',
-        paint: { 'line-color': ['get', 'color'], 'line-width': 3, 'line-opacity': 0.75, 'line-dasharray': [2, 1.5] },
+        filter: ['!=', ['get', 'mode'], 'walk'],
+        paint: { 'line-color': ['get', 'color'], 'line-width': 4, 'line-opacity': 0.8 },
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+      })
+      m.addLayer({
+        id: WALK_LAYER,
+        type: 'line',
+        source: 'routes',
+        filter: ['==', ['get', 'mode'], 'walk'],
+        paint: { 'line-color': ['get', 'color'], 'line-width': 3.5, 'line-opacity': 0.9, 'line-dasharray': [0.2, 1.6] },
         layout: { 'line-cap': 'round', 'line-join': 'round' },
       })
     }
 
     if (!bounds.isEmpty()) m.fitBounds(bounds, { padding: 48, maxZoom: 14, duration: 400 })
-  }, [days, destinations, homeBase, selectedDay, highlighted, ready, onSelectStop])
+  }, [days, destinations, homeBase, selectedDay, highlighted, routes, ready, onSelectStop])
 
   if (failed) {
     return (
@@ -119,5 +138,23 @@ export default function TripMap({ days, destinations, homeBase, selectedDay, hig
       </div>
     )
   }
-  return <div ref={container} className="h-full min-h-64 w-full overflow-hidden rounded-xl" />
+  return (
+    <div className="relative h-full min-h-64 w-full">
+      <div ref={container} className="h-full w-full overflow-hidden rounded-xl" />
+      <div className="pointer-events-none absolute bottom-2 left-2 flex items-center gap-3 rounded-md bg-white/90 px-2 py-1 text-[11px] text-stone-600 shadow-sm">
+        <span className="flex items-center gap-1">
+          <svg width="22" height="4" aria-hidden="true">
+            <line x1="2" y1="2" x2="20" y2="2" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray="0.5 4.5" />
+          </svg>
+          Walk
+        </span>
+        <span className="flex items-center gap-1">
+          <svg width="22" height="4" aria-hidden="true">
+            <line x1="2" y1="2" x2="20" y2="2" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+          </svg>
+          Transit / taxi
+        </span>
+      </div>
+    </div>
+  )
 }
