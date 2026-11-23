@@ -7,23 +7,56 @@ import { Button, ErrorBox, Field, Input, Select } from './ui'
 
 const STYLE_URL = import.meta.env.VITE_MAP_STYLE_URL ?? 'https://tiles.openfreemap.org/styles/liberty'
 const GEOCODER_URL = import.meta.env.VITE_GEOCODER_URL ?? 'https://nominatim.openstreetmap.org/reverse'
+const SEARCH_URL = import.meta.env.VITE_GEOCODER_SEARCH_URL ?? GEOCODER_URL.replace(/\/reverse$/, '/search')
+/** Wait this long after the last keystroke before searching (Nominatim allows ~1 request/s). */
+const SEARCH_DEBOUNCE_MS = 700
+/** Search within this many degrees of the city center so matches stay in the trip's city. */
+const SEARCH_RADIUS_DEG = 0.35
 
 interface NominatimPlace {
   name?: string
   display_name?: string
   address?: Record<string, string>
+  lat?: string
+  lon?: string
 }
 
-/** Reverse-geocode a point to a short label like "Hotel — 151 E Wacker Dr". */
-async function reverseGeocode(lat: number, lng: number, signal: AbortSignal): Promise<string | null> {
-  const url = `${GEOCODER_URL}?format=jsonv2&zoom=18&lat=${lat}&lon=${lng}`
-  const res = await fetch(url, { signal, headers: { Accept: 'application/json' } })
-  if (!res.ok) return null
-  const place: NominatimPlace = await res.json()
+interface PlaceMatch {
+  label: string
+  lat: number
+  lng: number
+}
+
+/** A short label like "Hotel — 151 E Wacker Dr". */
+function shortLabel(place: NominatimPlace): string | null {
   const a = place.address ?? {}
   const street = [a.house_number, a.road].filter(Boolean).join(' ')
   if (place.name && street) return `${place.name} — ${street}`
   return place.name || street || place.display_name?.split(',').slice(0, 2).join(',').trim() || null
+}
+
+/** Reverse-geocode a point to a short label. */
+async function reverseGeocode(lat: number, lng: number, signal: AbortSignal): Promise<string | null> {
+  const url = `${GEOCODER_URL}?format=jsonv2&zoom=18&lat=${lat}&lon=${lng}`
+  const res = await fetch(url, { signal, headers: { Accept: 'application/json' } })
+  if (!res.ok) return null
+  return shortLabel(await res.json())
+}
+
+/** Find places matching typed text near the city center (up to 5). */
+async function searchPlaces(query: string, near: { lat: number; lng: number }, signal: AbortSignal): Promise<PlaceMatch[]> {
+  const r = SEARCH_RADIUS_DEG
+  const viewbox = [near.lng - r, near.lat + r, near.lng + r, near.lat - r].join(',')
+  const params = new URLSearchParams({ format: 'jsonv2', addressdetails: '1', limit: '5', bounded: '1', viewbox, q: query })
+  const res = await fetch(`${SEARCH_URL}?${params}`, { signal, headers: { Accept: 'application/json' } })
+  if (!res.ok) return []
+  const places: NominatimPlace[] = await res.json()
+  return places.flatMap((p) => {
+    const label = shortLabel(p)
+    const lat = Number(p.lat)
+    const lng = Number(p.lon)
+    return label && Number.isFinite(lat) && Number.isFinite(lng) ? [{ label, lat, lng }] : []
+  })
 }
 
 interface Props {
@@ -53,13 +86,55 @@ export default function TripForm({ cities, initial, submitLabel, onSubmit }: Pro
   const [pending, setPending] = useState(false)
   const [locating, setLocating] = useState(false)
   const lookup = useRef<AbortController | null>(null)
+  const [matches, setMatches] = useState<PlaceMatch[]>([])
+  const search = useRef<{ timer?: ReturnType<typeof setTimeout>; ctrl?: AbortController }>({})
   const set = <K extends keyof TripInput>(k: K, v: TripInput[K]) => setForm((f) => ({ ...f, [k]: v }))
 
-  useEffect(() => () => lookup.current?.abort(), [])
+  useEffect(
+    () => () => {
+      lookup.current?.abort()
+      clearTimeout(search.current.timer)
+      search.current.ctrl?.abort()
+    },
+    [],
+  )
+
+  function cancelSearch() {
+    clearTimeout(search.current.timer)
+    search.current.ctrl?.abort()
+    setMatches([])
+  }
+
+  // Typing a hotel or address searches near the city center after a pause and
+  // offers matches; picking one moves the pin there.
+  function typeHomeBase(label: string) {
+    setForm((f) => ({ ...f, home_base: { ...f.home_base, label } }))
+    cancelSearch()
+    if (label.trim().length < 3) return
+    const c = cities.find((x) => x.city_id === form.city_id)
+    const near = c ? { lat: c.center[1], lng: c.center[0] } : { lat: form.home_base.lat, lng: form.home_base.lng }
+    search.current.timer = setTimeout(async () => {
+      const ctrl = new AbortController()
+      search.current.ctrl = ctrl
+      try {
+        const found = await searchPlaces(label.trim(), near, ctrl.signal)
+        if (!ctrl.signal.aborted) setMatches(found)
+      } catch {
+        // Offline or rate-limited: the map tap still works.
+      }
+    }, SEARCH_DEBOUNCE_MS)
+  }
+
+  function pickMatch(match: PlaceMatch) {
+    cancelSearch()
+    lookup.current?.abort()
+    setForm((f) => ({ ...f, home_base: { label: match.label, lat: match.lat, lng: match.lng } }))
+  }
 
   // Moving the pin fills the home-base label with the address under it; a newer
   // tap cancels any lookup still in flight so stale answers never win.
   async function placeHomeBase(lat: number, lng: number) {
+    cancelSearch()
     setForm((f) => ({ ...f, home_base: { ...f.home_base, lat, lng } }))
     lookup.current?.abort()
     const ctrl = new AbortController()
@@ -126,14 +201,51 @@ export default function TripForm({ cities, initial, submitLabel, onSubmit }: Pro
       </div>
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium text-stone-700">Home base</legend>
-        <Input
-          required
-          placeholder="Hotel or address, e.g. Hotel — 151 E Wacker Dr"
-          value={form.home_base.label}
-          onChange={(e) => set('home_base', { ...form.home_base, label: e.target.value })}
-        />
+        <div className="relative">
+          <Input
+            required
+            autoComplete="off"
+            placeholder="Hotel or address, e.g. Hotel — 151 E Wacker Dr"
+            value={form.home_base.label}
+            onChange={(e) => typeHomeBase(e.target.value)}
+            onBlur={() => setMatches([])}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setMatches([])
+              if (e.key === 'Enter' && matches.length) {
+                // Pick the top match instead of submitting the form.
+                e.preventDefault()
+                pickMatch(matches[0])
+              }
+            }}
+          />
+          {matches.length > 0 && (
+            <ul
+              role="listbox"
+              aria-label="Matching places"
+              className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-stone-200 bg-white shadow-lg"
+            >
+              {matches.map((m) => (
+                <li key={`${m.lat},${m.lng},${m.label}`}>
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected={false}
+                    className="block w-full px-3 py-2 text-left text-sm hover:bg-stone-100"
+                    // mousedown, not click: the input's blur would hide the list first.
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      pickMatch(m)
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
         <p className="text-xs text-stone-500">
-          Tap the map to place your home base and fill in its address. Every day starts and ends here.
+          Type a hotel or address and pick a match, or tap the map. Every day starts and ends here.
         </p>
         <HomeBasePicker lat={form.home_base.lat} lng={form.home_base.lng} onChange={placeHomeBase} />
         <p className="text-xs text-stone-400">

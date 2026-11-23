@@ -104,6 +104,33 @@ describe('NewTripPage (trip form)', () => {
     expect(create.mock.calls[0][0]).toMatchObject({ city_id: 'nyc', home_base: { lat: 40.71, lng: -74.0 } })
   })
 
+  it('searches typed home-base text near the city and moves the pin to the picked match', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => [
+        { name: 'Hotel Wacker', address: { house_number: '151', road: 'E Wacker Dr' }, lat: '41.8875', lon: '-87.6233' },
+      ],
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const create = vi.spyOn(api, 'createTrip').mockResolvedValue(trip)
+    const user = userEvent.setup()
+    renderPage(<NewTripPage />, { path: '/trips/new', ctx: false })
+    await fillForm(user)
+
+    const match = await screen.findByRole('option', { name: 'Hotel Wacker — 151 E Wacker Dr' }, { timeout: 3000 })
+    const url = String(fetchMock.mock.calls[0][0])
+    expect(url).toContain('/search?')
+    expect(url).toContain('bounded=1')
+    fireEvent.mouseDown(match)
+    expect(screen.getByText('41.88750, -87.62330')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Create trip' }))
+    expect(create.mock.calls[0][0]).toMatchObject({
+      home_base: { label: 'Hotel Wacker — 151 E Wacker Dr', lat: 41.8875, lng: -87.6233 },
+    })
+    vi.unstubAllGlobals()
+  })
+
   it('rejects an end date before the start date', async () => {
     const create = vi.spyOn(api, 'createTrip')
     const user = userEvent.setup()

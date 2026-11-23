@@ -11,6 +11,8 @@ interface ImportMetaEnv {
   readonly VITE_MAP_STYLE_URL?: string
   /** Nominatim-compatible reverse-geocoding endpoint for the home-base picker */
   readonly VITE_GEOCODER_URL?: string
+  /** Nominatim-compatible search endpoint for typing a home base (defaults to GEOCODER_URL's /search) */
+  readonly VITE_GEOCODER_SEARCH_URL?: string
 }
 
 interface ImportMeta {
