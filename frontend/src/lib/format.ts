@@ -16,7 +16,7 @@ export const CATEGORY_META: Record<Category, { label: string; emoji: string }> =
 export const MODE_META: Record<TravelMode, { label: string; emoji: string }> = {
   walk: { label: 'Walk', emoji: '🚶' },
   transit: { label: 'Transit', emoji: '🚇' },
-  drive: { label: 'Drive', emoji: '🚗' },
+  drive: { label: 'Taxi', emoji: '🚕' },
 }
 
 /** Distinct, colorblind-friendlier day colors used on the map and timeline. */

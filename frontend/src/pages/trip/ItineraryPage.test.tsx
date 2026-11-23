@@ -19,6 +19,7 @@ vi.mock('../../components/TripMap', () => ({
 function mockItinerary(it: Itinerary | null = itinerary) {
   vi.spyOn(api, 'getItinerary').mockResolvedValue(it)
   vi.spyOn(api, 'listDestinations').mockResolvedValue(destinations)
+  vi.spyOn(api, 'getItineraryRoutes').mockResolvedValue([])
 }
 
 const renderItinerary = (organizer = true) =>

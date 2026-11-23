@@ -81,6 +81,16 @@ async def _apply_startup_migrations() -> None:
                 await connection.execute(
                     text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS home_base_label TEXT NOT NULL DEFAULT ''")
                 )
+                await connection.execute(
+                    text("ALTER TABLE itinerary_stop ADD COLUMN IF NOT EXISTS travel_min_from_prev SMALLINT")
+                )
+                await connection.execute(text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS itinerary_solver TEXT"))
+                await connection.execute(
+                    text("ALTER TABLE trip ADD COLUMN IF NOT EXISTS itinerary_generated_at TIMESTAMPTZ")
+                )
+                await connection.execute(
+                    text("ALTER TABLE itinerary_stop ADD COLUMN IF NOT EXISTS travel_mode_from_prev TEXT")
+                )
                 # Trips created before invite links existed get a token now.
                 missing_tokens = (
                     await connection.execute(text("SELECT trip_id FROM trip WHERE invite_token IS NULL"))

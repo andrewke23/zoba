@@ -20,3 +20,13 @@ def test_empty_itinerary_is_a_complete_zero_estimate() -> None:
 
     assert estimate.per_person_total == Decimal(0)
     assert estimate.is_complete
+
+
+def test_transport_fares_follow_the_leg_modes() -> None:
+    from app.services.cost_estimate import estimate_transport_costs
+
+    estimate = estimate_transport_costs(["walk", "transit", "drive", "transit", None])
+
+    assert estimate.transit_leg_count == 2
+    assert estimate.taxi_leg_count == 1
+    assert estimate.per_person_total == Decimal("11.00")  # 2 x 2.50 + 6.00

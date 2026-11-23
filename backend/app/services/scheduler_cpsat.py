@@ -48,7 +48,6 @@ from app.services.scheduler import (
     ScheduledStop,
     TravelEstimator,
     schedule_trip,
-    straight_line_estimator,
 )
 
 SCORE_SCALE = 1000
@@ -120,7 +119,7 @@ def solve_trip(
     day_start_minute: int,
     day_end_minute: int,
     home_base: Coordinate,
-    travel: TravelEstimator | None = None,
+    travel: TravelEstimator,
     locked: Iterable[LockedStop] = (),
     time_limit_seconds: float = DEFAULT_TIME_LIMIT_SECONDS,
     workers: int = 8,
@@ -132,7 +131,7 @@ def solve_trip(
     if day_end_minute <= day_start_minute:
         raise ValueError("day_end_minute must be after day_start_minute")
 
-    estimator = travel or straight_line_estimator()
+    estimator = travel
     locked_stops = list(locked)
     pinned = {stop.destination_id for stop in locked_stops}
 
@@ -368,7 +367,7 @@ def schedule_trip_cpsat(
     day_start_minute: int,
     day_end_minute: int,
     home_base: Coordinate,
-    travel: TravelEstimator | None = None,
+    travel: TravelEstimator,
     locked: Iterable[LockedStop] = (),
     time_limit_seconds: float = DEFAULT_TIME_LIMIT_SECONDS,
     warm_start: bool = True,

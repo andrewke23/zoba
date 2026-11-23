@@ -61,7 +61,7 @@ def run_greedy(
     day_start_minute: int,
     day_end_minute: int,
     home_base: Coordinate,
-    travel: TravelEstimator | None = None,
+    travel: TravelEstimator,
     locked: Iterable[LockedStop] = (),
 ) -> SolverRun:
     started = time.perf_counter()
@@ -91,7 +91,7 @@ def run_cpsat(
     day_start_minute: int,
     day_end_minute: int,
     home_base: Coordinate,
-    travel: TravelEstimator | None = None,
+    travel: TravelEstimator,
     locked: Iterable[LockedStop] = (),
     time_limit_seconds: float = 10.0,
 ) -> SolverRun:
@@ -124,7 +124,7 @@ def compare(
     day_start_minute: int,
     day_end_minute: int,
     home_base: Coordinate,
-    travel: TravelEstimator | None = None,
+    travel: TravelEstimator,
     locked: Iterable[LockedStop] = (),
     time_limit_seconds: float = 10.0,
 ) -> list[SolverRun]:

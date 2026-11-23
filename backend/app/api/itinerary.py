@@ -11,6 +11,7 @@ not care where a score came from, so that swap touches this module only.
 """
 
 import json
+import logging
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -30,6 +31,7 @@ from app.schemas.itinerary import (
     ItineraryRead,
     ItineraryStopRead,
     LockRequest,
+    RouteLegRead,
     SolverMetricsRead,
     TopPickStatusRead,
     UnscheduledRead,
@@ -38,23 +40,20 @@ from app.services.scheduler import (
     Candidate,
     LockedStop,
     OpeningWindow,
-    haversine_km,
     schedule_trip,
-    straight_line_estimator,
     visit_minutes,
 )
+from app.services.routing import RoutedEstimator, RoutingUnavailable, build_estimator, fetch_route_shapes
 from app.services.scheduler_cpsat import SolverUnavailable, schedule_trip_cpsat
 from app.services.solver_comparison import compare
 
 router = APIRouter(prefix="/trips/{trip_id}")
+logger = logging.getLogger(__name__)
 
-TRAVEL_MODE = "walk"
-"""Only walking is estimated today. Real OSRM routing adds drive and transit."""
-
-# When an itinerary was generated is not yet a column on itinerary_stop, so it
-# is remembered per process. Reads after a restart report the read time. Replace
-# with a stored column when the schema next changes.
-_GENERATED_AT: dict[UUID, datetime] = {}
+# Travel times come from road-network routes (app/services/routing.py). Each
+# leg's minutes and mode are stored with the stop when the itinerary is
+# generated, so reads show exactly what the solver budgeted and do not depend
+# on the routing service being up.
 
 _CANDIDATE_SQL = text(
     """
@@ -102,6 +101,7 @@ _MEMBERS_SQL = text("SELECT user_id FROM membership WHERE trip_id = :trip_id AND
 _STOPS_SQL = text(
     """
     SELECT s.day_index, s.seq, s.destination_id, s.start_ts, s.end_ts, s.locked, d.name,
+           s.travel_min_from_prev, s.travel_mode_from_prev,
            ST_Y(d.geom::geometry) AS latitude, ST_X(d.geom::geometry) AS longitude
     FROM itinerary_stop s
     JOIN destination d ON d.destination_id = s.destination_id
@@ -114,6 +114,29 @@ _HOME_BASE_SQL = text(
     "SELECT ST_Y(home_base::geometry) AS latitude, ST_X(home_base::geometry) AS longitude "
     "FROM trip WHERE trip_id = :trip_id"
 )
+
+
+async def _estimator(points) -> RoutedEstimator:
+    """Road-network travel times between ``points``, or 503 if routing is down."""
+    try:
+        return await build_estimator(points)
+    except RoutingUnavailable as exc:
+        logger.warning("Routing unavailable: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Travel times are unavailable right now (routing service unreachable). Try again shortly.",
+        ) from exc
+
+
+def _legs_by_stop(stops, home, estimate: RoutedEstimator) -> dict[tuple[int, int], tuple[int, str]]:
+    """(day_index, seq) -> (minutes, mode) for the leg arriving at each stop."""
+    legs: dict[tuple[int, int], tuple[int, str]] = {}
+    previous: dict[int, tuple[float, float]] = {}
+    for day_index, seq, here in sorted(stops, key=lambda stop: (stop[0], stop[1])):
+        leg = estimate.leg(previous.get(day_index, home), here)
+        legs[(day_index, seq)] = (leg.minutes, leg.mode)
+        previous[day_index] = here
+    return legs
 
 
 def _minutes_since_midnight(value) -> int:
@@ -239,41 +262,55 @@ def _fairness(
     return (min(utilities) if utilities else 0.0), top_picks
 
 
-async def _read_itinerary(
-    session: AsyncSession, trip: Trip, solver: str = "greedy"
-) -> ItineraryRead | None:
+async def _read_itinerary(session: AsyncSession, trip: Trip) -> ItineraryRead | None:
     """Rebuild the response from persisted stops."""
+    solver = trip.itinerary_solver or "greedy"
     tz = await _timezone(session, trip.city_id)
     rows = (await session.execute(_STOPS_SQL, {"trip_id": trip.id})).mappings().all()
     if not rows:
         return None
 
     days = _trip_days(trip)
-    home = await _home_base(session, trip)
-    estimate = straight_line_estimator()
+    legs = {
+        (row["day_index"], row["seq"]): (row["travel_min_from_prev"], row["travel_mode_from_prev"])
+        for row in rows
+    }
+    if any(minutes is None or mode is None for minutes, mode in legs.values()):
+        # Stops saved before travel legs were stored: route them once and keep the result.
+        home = await _home_base(session, trip)
+        stops = [(row["day_index"], row["seq"], (float(row["latitude"]), float(row["longitude"]))) for row in rows]
+        estimate = await _estimator([home] + [here for _, _, here in stops])
+        legs = _legs_by_stop(stops, home, estimate)
+        for (day_index, seq), (minutes, mode) in legs.items():
+            await session.execute(
+                text(
+                    "UPDATE itinerary_stop SET travel_min_from_prev = :minutes, travel_mode_from_prev = :mode "
+                    "WHERE trip_id = :trip_id AND day_index = :day_index AND seq = :seq"
+                ),
+                {"minutes": minutes, "mode": mode, "trip_id": trip.id, "day_index": day_index, "seq": seq},
+            )
+        await session.commit()
 
     by_day: dict[int, list[ItineraryStopRead]] = defaultdict(list)
     travel_total = 0
-    previous_location: dict[int, tuple[float, float]] = {}
 
     for row in rows:
         day_index = row["day_index"]
-        here = (float(row["latitude"]), float(row["longitude"]))
-        origin = previous_location.get(day_index, home)
-        travel = estimate(origin, here)
-        travel_total += travel
-        previous_location[day_index] = here
+        minutes, mode = legs[(day_index, row["seq"])]
+        travel_total += minutes
         by_day[day_index].append(
             ItineraryStopRead(
                 trip_id=trip.id,
                 day_index=day_index,
                 seq=row["seq"],
                 destination_id=row["destination_id"],
-                start_ts=row["start_ts"],
-                end_ts=row["end_ts"],
+                # In the city's local time: the UI shows the wall-clock part of
+                # the timestamp, so UTC here would display 9 AM as 3 PM.
+                start_ts=row["start_ts"].astimezone(tz),
+                end_ts=row["end_ts"].astimezone(tz),
                 locked=row["locked"],
-                travel_min_from_prev=travel,
-                travel_mode_from_prev=TRAVEL_MODE,
+                travel_min_from_prev=minutes,
+                travel_mode_from_prev=mode,
             )
         )
 
@@ -289,7 +326,7 @@ async def _read_itinerary(
     return ItineraryRead(
         trip_id=trip.id,
         solver=solver,
-        generated_at=_GENERATED_AT.get(trip.id, datetime.now(timezone.utc)),
+        generated_at=trip.itinerary_generated_at or datetime.now(timezone.utc),
         days=[
             ItineraryDayRead(day_index=index, date=days[index], stops=by_day.get(index, []))
             for index in range(len(days))
@@ -329,13 +366,16 @@ async def generate_itinerary(
 
     locked = await _load_locked(session, trip, tz)
     days = _trip_days(trip)
+    estimate = await _estimator(
+        [home] + [candidate.location for candidate in candidates] + [stop.location for stop in locked]
+    )
 
     solver_kwargs = dict(
         days=days,
         day_start_minute=_minutes_since_midnight(trip.daily_start_time),
         day_end_minute=_minutes_since_midnight(trip.daily_end_time),
         home_base=home,
-        travel=straight_line_estimator(),
+        travel=estimate,
         locked=locked,
     )
 
@@ -351,8 +391,15 @@ async def generate_itinerary(
         itinerary = schedule_trip(candidates, **solver_kwargs)
     runtime_ms = int((time.perf_counter() - started) * 1000)
 
+    locations = {candidate.destination_id: candidate.location for candidate in candidates}
+    locations.update({stop.destination_id: stop.location for stop in locked})
+    legs = _legs_by_stop(
+        [(stop.day_index, stop.seq, locations[stop.destination_id]) for stop in itinerary.stops], home, estimate
+    )
+
     await session.execute(delete(ItineraryStop).where(ItineraryStop.trip_id == trip.id))
     for stop in itinerary.stops:
+        minutes, mode = legs[(stop.day_index, stop.seq)]
         session.add(
             ItineraryStop(
                 trip_id=trip.id,
@@ -362,12 +409,15 @@ async def generate_itinerary(
                 start_ts=_to_timestamp(days[stop.day_index], stop.start_minute, tz),
                 end_ts=_to_timestamp(days[stop.day_index], stop.end_minute, tz),
                 locked=stop.locked,
+                travel_min_from_prev=minutes,
+                travel_mode_from_prev=mode,
             )
         )
+    trip.itinerary_solver = options.solver
+    trip.itinerary_generated_at = datetime.now(timezone.utc)
     await session.commit()
-    _GENERATED_AT[trip.id] = datetime.now(timezone.utc)
 
-    response = await _read_itinerary(session, trip, solver=options.solver)
+    response = await _read_itinerary(session, trip)
     assert response is not None  # we just wrote the stops
 
     names = {candidate.destination_id: candidate.name for candidate in candidates}
@@ -392,6 +442,90 @@ async def read_itinerary(
     if itinerary is None:
         response.status_code = status.HTTP_204_NO_CONTENT
     return itinerary
+
+
+@router.get("/itinerary/routes", response_model=list[RouteLegRead])
+async def read_itinerary_routes(
+    trip_and_membership: tuple[Trip, Membership] = Depends(get_trip_for_member),
+    session: AsyncSession = Depends(get_session),
+) -> list[RouteLegRead]:
+    """Street paths for every leg of every day, including the ride back to the hotel.
+
+    The stops' travel modes are the ones stored at generation time; the return
+    leg's mode is chosen the same way. Shapes come from OSRM (walking on the foot
+    network, taxi and transit on the street network).
+    """
+    trip, _ = trip_and_membership
+    itinerary = await _read_itinerary(session, trip)  # also fills in any missing leg modes
+    if itinerary is None:
+        return []
+
+    rows = (await session.execute(_STOPS_SQL, {"trip_id": trip.id})).mappings().all()
+    home = await _home_base(session, trip)
+    location = {row["destination_id"]: (float(row["latitude"]), float(row["longitude"])) for row in rows}
+
+    legs: list[dict] = []
+    last_stops: list[tuple[float, float]] = []
+    for day in itinerary.days:
+        previous_id, previous_at = None, home
+        for seq, stop in enumerate(day.stops):
+            here = location[stop.destination_id]
+            legs.append(
+                dict(
+                    day_index=day.day_index,
+                    seq=seq,
+                    from_destination_id=previous_id,
+                    to_destination_id=stop.destination_id,
+                    mode=stop.travel_mode_from_prev,
+                    minutes=stop.travel_min_from_prev,
+                    origin=previous_at,
+                    destination=here,
+                )
+            )
+            previous_id, previous_at = stop.destination_id, here
+        if day.stops:
+            last_stops.append(previous_at)
+            legs.append(
+                dict(
+                    day_index=day.day_index,
+                    seq=len(day.stops),
+                    from_destination_id=previous_id,
+                    to_destination_id=None,
+                    mode=None,
+                    minutes=None,
+                    origin=previous_at,
+                    destination=home,
+                )
+            )
+
+    if last_stops:
+        estimate = await _estimator([home, *last_stops])
+        for leg in legs:
+            if leg["mode"] is None:
+                back = estimate.leg(leg["origin"], leg["destination"])
+                leg["mode"], leg["minutes"] = back.mode, back.minutes
+
+    try:
+        shapes = await fetch_route_shapes([(leg["mode"], leg["origin"], leg["destination"]) for leg in legs])
+    except RoutingUnavailable as exc:
+        logger.warning("Route shapes unavailable: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Route lines are unavailable right now (routing service unreachable). Try again shortly.",
+        ) from exc
+
+    return [
+        RouteLegRead(
+            day_index=leg["day_index"],
+            seq=leg["seq"],
+            from_destination_id=leg["from_destination_id"],
+            to_destination_id=leg["to_destination_id"],
+            mode=leg["mode"],
+            minutes=leg["minutes"],
+            coordinates=list(shape),
+        )
+        for leg, shape in zip(legs, shapes)
+    ]
 
 
 @router.put("/itinerary/stops/{destination_id}/lock", response_model=ItineraryRead)
@@ -422,6 +556,8 @@ async def set_stop_lock(
             {"trip_id": trip.id, "destination_id": destination_id},
         )
         duration = int(existing) if existing else 60
+        # The UI sends a wall-clock time with no offset; it means local time in the trip's city.
+        start_ts = lock.start_ts if lock.start_ts.tzinfo else lock.start_ts.replace(tzinfo=tz)
         await session.execute(
             text(
                 """
@@ -438,14 +574,15 @@ async def set_stop_lock(
                 "trip_id": trip.id,
                 "day_index": lock.day_index,
                 "destination_id": destination_id,
-                "start_ts": lock.start_ts,
-                "end_ts": lock.start_ts + timedelta(minutes=duration),
+                "start_ts": start_ts,
+                "end_ts": start_ts + timedelta(minutes=duration),
             },
         )
     await session.commit()
 
     return await generate_itinerary(
-        payload=GenerateItineraryRequest(),
+        # Re-solve with the method that produced the current itinerary.
+        payload=GenerateItineraryRequest(solver=trip.itinerary_solver or "greedy"),
         trip_and_membership=trip_and_membership,
         session=session,
     )
@@ -480,7 +617,9 @@ async def compare_solvers(
         day_start_minute=_minutes_since_midnight(trip.daily_start_time),
         day_end_minute=_minutes_since_midnight(trip.daily_end_time),
         home_base=home,
-        travel=straight_line_estimator(),
+        travel=await _estimator(
+            [home] + [candidate.location for candidate in candidates] + [stop.location for stop in locked]
+        ),
         locked=locked,
     )
 

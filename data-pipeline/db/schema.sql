@@ -94,7 +94,10 @@ CREATE TABLE IF NOT EXISTS trip (
     home_base       GEOGRAPHY(Point, 4326) NOT NULL,
     home_base_label TEXT NOT NULL DEFAULT '',       -- app column (backend startup migration on old volumes)
     invite_token    TEXT UNIQUE,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- How and when the current itinerary was generated.
+    itinerary_solver       TEXT CHECK (itinerary_solver IN ('greedy','cpsat')),
+    itinerary_generated_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS membership (
@@ -136,6 +139,9 @@ CREATE TABLE IF NOT EXISTS itinerary_stop (
     start_ts        TIMESTAMPTZ NOT NULL,
     end_ts          TIMESTAMPTZ NOT NULL CHECK (end_ts > start_ts),
     locked          BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Road-network leg arriving at this stop, fixed at generation time.
+    travel_min_from_prev  SMALLINT,
+    travel_mode_from_prev TEXT CHECK (travel_mode_from_prev IN ('walk','transit','drive')),
     PRIMARY KEY (trip_id, day_index, seq)
 );
 

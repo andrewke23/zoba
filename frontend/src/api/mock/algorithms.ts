@@ -196,11 +196,28 @@ export function haversineKm(a: Pt, b: Pt): number {
   return 2 * R * Math.asin(Math.sqrt(s))
 }
 
-/** Stand-in for the cached OSRM/OTP matrix. */
+/**
+ * Mirrors MultimodalEstimator in backend/app/services/scheduler.py: each mode's
+ * door-to-door minutes are overhead + street distance / speed, and the leg uses
+ * the mode with the lowest minutes + penalty (penalty = fare/hassle, not shown).
+ * Keep the two in sync so mock and real itineraries agree.
+ */
+const MODES: { mode: TravelMode; kmh: number; detour: number; overhead: number; penalty: number; minKm: number; maxKm: number }[] = [
+  { mode: 'walk', kmh: 4.8, detour: 1.3, overhead: 0, penalty: 0, minKm: 0, maxKm: 3 },
+  { mode: 'transit', kmh: 20, detour: 1.4, overhead: 12, penalty: 4, minKm: 0.8, maxKm: Infinity },
+  { mode: 'drive', kmh: 24, detour: 1.35, overhead: 7, penalty: 15, minKm: 1, maxKm: Infinity },
+]
+
 export function travel(a: Pt, b: Pt): { min: number; mode: TravelMode } {
-  const km = haversineKm(a, b) * 1.3 // street-network detour factor
-  if (km <= 1.6) return { min: Math.max(3, Math.ceil((km / 4.8) * 60)), mode: 'walk' }
-  return { min: Math.ceil((km / 18) * 60) + 8, mode: 'transit' }
+  const km = haversineKm(a, b)
+  const offered = MODES.filter((m) => km >= m.minKm && km <= m.maxKm)
+  let best: { min: number; mode: TravelMode; cost: number } | null = null
+  for (const m of offered.length ? offered : MODES) {
+    const min = Math.max(1, Math.round(m.overhead + ((km * m.detour) / m.kmh) * 60))
+    const cost = min + m.penalty
+    if (!best || cost < best.cost || (cost === best.cost && min < best.min)) best = { min, mode: m.mode, cost }
+  }
+  return { min: best!.min, mode: best!.mode }
 }
 
 export const toMin = (hhmm: string) => {

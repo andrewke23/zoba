@@ -72,6 +72,22 @@ class LockRequest(BaseModel):
     start_ts: datetime
 
 
+class RouteLegRead(BaseModel):
+    """One leg of a day drawn on the map: the street path and how it is travelled."""
+
+    day_index: int
+    seq: int
+    """Order within the day; the last leg of each day returns to the home base."""
+    from_destination_id: UUID | None
+    """None means the home base."""
+    to_destination_id: UUID | None
+    """None means the home base (the ride back at the end of the day)."""
+    mode: TravelMode
+    minutes: int
+    coordinates: list[tuple[float, float]]
+    """[longitude, latitude] pairs along the route. Empty if no route exists."""
+
+
 class GenerateItineraryRequest(BaseModel):
     solver: SolverKind = "greedy"
     candidate_limit: int = Field(default=60, ge=1, le=300)

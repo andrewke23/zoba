@@ -83,6 +83,9 @@ class Trip(Base):
     home_base_label: Mapped[str] = mapped_column(String, nullable=False, server_default=text("''"))
     invite_token: Mapped[str | None] = mapped_column(String, unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    # How and when the current itinerary was generated (additive columns).
+    itinerary_solver: Mapped[str | None] = mapped_column(String, nullable=True)
+    itinerary_generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class Membership(Base):
@@ -133,6 +136,10 @@ class ItineraryStop(Base):
     start_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     end_ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     locked: Mapped[bool] = mapped_column(nullable=False, server_default=text("false"))
+    # The road-network leg arriving at this stop, fixed when the itinerary is
+    # generated (additive columns; startup migration on old volumes).
+    travel_min_from_prev: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    travel_mode_from_prev: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Preference(Base):

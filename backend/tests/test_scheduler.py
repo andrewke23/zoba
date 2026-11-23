@@ -58,7 +58,9 @@ def test_no_candidates_returns_empty_itinerary():
 
 def test_day_end_before_day_start_is_rejected():
     with pytest.raises(ValueError):
-        schedule_trip([], days=[MONDAY], day_start_minute=SIX_PM, day_end_minute=NINE_AM, home_base=HOME)
+        schedule_trip(
+            [], days=[MONDAY], day_start_minute=SIX_PM, day_end_minute=NINE_AM, home_base=HOME, travel=no_travel
+        )
 
 
 def test_stops_are_sequential_and_do_not_overlap():

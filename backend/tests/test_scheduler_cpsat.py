@@ -197,11 +197,14 @@ def test_warm_start_never_loses_to_greedy_at_scale():
         )
         for i in range(1, 41)
     ]
+    from app.services.scheduler import straight_line_estimator
+
     kwargs = dict(
         days=[MONDAY, TUESDAY],
         day_start_minute=NINE_AM,
         day_end_minute=SIX_PM,
         home_base=HOME,
+        travel=straight_line_estimator(),
     )
     greedy = schedule_trip(candidates, **kwargs)
     warm = solve_trip(candidates, **kwargs, time_limit_seconds=3.0, warm_start=True)

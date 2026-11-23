@@ -24,6 +24,7 @@ import type {
   Preference,
   PreferenceConfig,
   Role,
+  RouteLeg,
   SolverMetrics,
   Task,
   Trip,
@@ -183,6 +184,11 @@ interface WireCostEstimate {
   priced_stop_count: number
   unpriced_stop_count: number
   is_complete: boolean
+  transport_per_person: string
+  transit_leg_count: number
+  taxi_leg_count: number
+  transit_fare: string
+  taxi_fare_per_person: string
 }
 
 // ---------------------------------------------------------------------------
@@ -354,24 +360,25 @@ export const realApi: Partial<ZobaApi> = {
       })),
     }
   },
-  // The backend estimates shared admission costs per person (F16); the page's
-  // per-traveler table is filled from the member list, with transit and meals
-  // reported as not-yet-estimated in the assumptions.
+  // The backend estimates shared admission and transport (transit/taxi fares
+  // from the itinerary's legs) per person (F16); the page's per-traveler table
+  // is filled from the member list. Meals are not estimated yet.
   getCostEstimate: async (id) => {
     const [wire, members] = await Promise.all([
       req<WireCostEstimate>('GET', `${t(id)}/cost-estimate`),
       req<WireMember[]>('GET', `${t(id)}/members`),
     ])
     const perPerson = parseFloat(wire.per_person_total)
+    const transport = parseFloat(wire.transport_per_person)
     const estimate: CostEstimate = {
       per_member: members
         .filter((m) => m.status === 'joined')
         .map((m) => ({
           user_id: m.user_id,
           admission_usd: perPerson,
-          transport_usd: 0,
+          transport_usd: transport,
           meals_usd: 0,
-          total_usd: perPerson,
+          total_usd: perPerson + transport,
         })),
       assumptions: [
         `Admission for ${wire.priced_stop_count} of ${wire.itinerary_stop_count} planned stops is priced from the destination catalog (${wire.currency}).`,
@@ -379,7 +386,8 @@ export const realApi: Partial<ZobaApi> = {
           ? [`${wire.unpriced_stop_count} stop${wire.unpriced_stop_count === 1 ? '' : 's'} without a known admission price ${wire.unpriced_stop_count === 1 ? 'is' : 'are'} excluded.`]
           : []),
         'The same admission estimate applies to every traveler.',
-        'Transit and meals are not estimated yet.',
+        `Transport: ${wire.transit_leg_count} transit leg${wire.transit_leg_count === 1 ? '' : 's'} at $${wire.transit_fare} and ${wire.taxi_leg_count} taxi leg${wire.taxi_leg_count === 1 ? '' : 's'} at $${wire.taxi_fare_per_person} per person (shared cab); walking is free.`,
+        'Meals are not estimated yet.',
       ],
     }
     return estimate
@@ -402,6 +410,9 @@ export const realApi: Partial<ZobaApi> = {
     req<Itinerary>('PUT', `${t(id)}/itinerary/stops/${destinationId}/lock`, lock),
 
   compareSolvers: (id) => req<SolverMetrics[]>('GET', `${t(id)}/itinerary/solver-comparison`),
+
+  // Street paths for every leg (OSRM), including each day's ride back to the hotel.
+  getItineraryRoutes: (id) => req<RouteLeg[]>('GET', `${t(id)}/itinerary/routes`),
 
   // Tasks and packing list ---------------------------------------------------
   listTasks: (id) => req<Task[]>('GET', `${t(id)}/tasks`),
