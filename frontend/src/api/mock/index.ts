@@ -408,6 +408,21 @@ export const mockApi: ZobaApi = {
       return progress(tripId)
     }),
 
+  undoLastComparison: (tripId) =>
+    respond(() => {
+      const m = membership(tripId)
+      let index = -1
+      for (let i = db.comparisons.length - 1; i >= 0; i--) {
+        if (db.comparisons[i].trip_id === tripId && db.comparisons[i].user_id === m.user_id) {
+          index = i
+          break
+        }
+      }
+      if (index === -1) throw new ApiError(404, 'No comparisons to undo.')
+      db.comparisons.splice(index, 1)
+      return progress(tripId)
+    }),
+
   getGroupResults: (tripId) =>
     respond(() => {
       membership(tripId)

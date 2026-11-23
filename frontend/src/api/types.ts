@@ -330,6 +330,7 @@ export interface ZobaApi {
   // Comparisons (F03, F04)
   getComparisonProgress(tripId: UUID): Promise<ComparisonProgress>
   submitComparison(tripId: UUID, pair: ComparisonPair, chosen: UUID): Promise<ComparisonProgress>
+  undoLastComparison(tripId: UUID): Promise<ComparisonProgress>
 
   // Group ranking (F06, F08a)
   getGroupResults(tripId: UUID): Promise<GroupResults>
