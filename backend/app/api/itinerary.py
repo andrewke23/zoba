@@ -4,10 +4,9 @@ Loads scored candidates for a trip, runs the scheduler, persists the result to
 ``itinerary_stop``, and returns it in the shape `frontend/src/api/types.ts`
 expects.
 
-Scores currently come from the raw point budgets in the ``preference`` table.
-That is a placeholder: the ranking service replaces ``_member_points`` with
-Bradley-Terry fits and regret-minimising group aggregation. The scheduler does
-not care where a score came from, so that swap touches this module only.
+Candidate scores are the group scores from ``ranking.compute_ranking`` (the same
+numbers the Group results page shows), applied by ``apply_group_scores``. If
+nobody has voted yet, they fall back to raw point totals.
 """
 
 import json
@@ -23,6 +22,7 @@ from sqlalchemy import delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_trip_for_member, require_trip_organizer
+from app.api.preferences import group_score_map
 from app.core.database import get_session
 from app.models.entities import ItineraryStop, Membership, Trip
 from app.schemas.itinerary import (
@@ -44,6 +44,7 @@ from app.services.scheduler import (
     visit_minutes,
 )
 from app.services.routing import RoutedEstimator, RoutingUnavailable, build_estimator, fetch_route_shapes
+from app.services.candidate_scoring import apply_group_scores
 from app.services.scheduler_cpsat import SolverUnavailable, schedule_trip_cpsat
 from app.services.solver_comparison import compare
 
@@ -87,6 +88,9 @@ _CANDIDATE_SQL = text(
     LIMIT :candidate_limit
     """
 )
+
+_ALL_CANDIDATES = 10_000
+"""Load every city destination; ``apply_group_scores`` applies the real limit."""
 
 _MEMBER_POINTS_SQL = text(
     """
@@ -171,10 +175,11 @@ async def _home_base(session: AsyncSession, trip: Trip) -> tuple[float, float]:
 
 
 async def _load_candidates(session: AsyncSession, trip: Trip, limit: int) -> list[Candidate]:
+    """The city's non-vetoed destinations, scored by the group ranking, best ``limit`` first."""
     result = await session.execute(
-        _CANDIDATE_SQL, {"trip_id": trip.id, "city_id": trip.city_id, "candidate_limit": limit}
+        _CANDIDATE_SQL, {"trip_id": trip.id, "city_id": trip.city_id, "candidate_limit": _ALL_CANDIDATES}
     )
-    return [
+    candidates = [
         Candidate(
             destination_id=row["destination_id"],
             name=row["name"],
@@ -185,6 +190,7 @@ async def _load_candidates(session: AsyncSession, trip: Trip, limit: int) -> lis
         )
         for row in result.mappings()
     ]
+    return apply_group_scores(candidates, await group_score_map(session, trip), limit)
 
 
 async def _member_points(session: AsyncSession, trip_id: UUID) -> dict[UUID, dict[UUID, float]]:

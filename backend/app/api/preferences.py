@@ -282,15 +282,11 @@ async def undo_last_comparison(
     await session.commit()
     return await _progress(session, trip, membership.user_id)
     
-@router.get("/group-results", response_model=GroupResultsRead)
-async def read_group_results(
-    access: tuple[Trip, Membership] = Depends(get_trip_for_member),
-    session: AsyncSession = Depends(get_session),
-) -> GroupResultsRead:
-    trip, _ = access
+async def compute_trip_ranking(session: AsyncSession, trip: Trip) -> ranking.RankingResult:
+    """The group ranking for a trip, from every joined member's points and comparisons."""
     catalog = await _catalog(session, trip.city_id)
     members = await _joined_member_ids(session, trip.id)
-    result = ranking.compute_ranking(
+    return ranking.compute_ranking(
         list(catalog),
         members,
         [
@@ -301,6 +297,27 @@ async def read_group_results(
         ],
         _comparison_inputs(await _comparisons(session, trip.id)),
     )
+
+
+async def group_score_map(session: AsyncSession, trip: Trip) -> dict[UUID, float]:
+    """destination_id -> group score, without vetoed places; empty if nobody has voted.
+
+    The itinerary scheduler uses this so it optimizes the same score the Group
+    results page shows.
+    """
+    result = await compute_trip_ranking(session, trip)
+    if not result.utility:
+        return {}
+    return {row.destination_id: row.group_score for row in result.rows if row.destination_id not in result.vetoed}
+
+
+@router.get("/group-results", response_model=GroupResultsRead)
+async def read_group_results(
+    access: tuple[Trip, Membership] = Depends(get_trip_for_member),
+    session: AsyncSession = Depends(get_session),
+) -> GroupResultsRead:
+    trip, _ = access
+    result = await compute_trip_ranking(session, trip)
     return GroupResultsRead(
         rows=[RankingRowRead(**vars(row)) for row in result.rows],
         top_picks=[MemberTopPickRead(user_id=user, destination_id=dest) for user, dest in result.top_picks.items()],
