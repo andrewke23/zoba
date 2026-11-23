@@ -1,7 +1,8 @@
+import { useEffect } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '../api'
 import { useAuth } from '../auth/AuthContext'
-import { Button, Card, ErrorBox, Loading } from '../components/ui'
+import { Button, Card, ErrorBox, Loading, Spinner } from '../components/ui'
 import { useAction, useAsync } from '../hooks/useAsync'
 import { formatDateRange, formatTime } from '../lib/format'
 
@@ -14,6 +15,13 @@ export default function JoinPage() {
     const trip = await api.joinTrip(token)
     navigate(`/trips/${trip.trip_id}/preferences`)
   })
+
+  // A signed-in visitor already consented by opening the link; join right
+  // away instead of making them confirm again every time they revisit it.
+  useEffect(() => {
+    if (user && invite.data && !join.pending && !join.error) void join.run()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, invite.data])
 
   if (invite.loading || authLoading) return <Loading />
 
@@ -36,9 +44,16 @@ export default function JoinPage() {
             <div className="mt-6 space-y-3">
               <ErrorBox error={join.error} />
               {user ? (
-                <Button className="w-full" loading={join.pending} onClick={() => join.run()}>
-                  Join as {user.display_name}
-                </Button>
+                join.error ? (
+                  <Button className="w-full" loading={join.pending} onClick={() => join.run()}>
+                    Try again
+                  </Button>
+                ) : (
+                  <div className="flex items-center justify-center gap-2 text-sm text-stone-500">
+                    <Spinner className="size-4" />
+                    Joining as {user.display_name}…
+                  </div>
+                )
               ) : (
                 <>
                   <Link to="/register" state={{ from: `/join/${token}` }} className="block">

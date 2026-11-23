@@ -48,7 +48,14 @@ export default function AppShell() {
       <MockBanner />
       <header className="sticky top-0 z-30 border-b border-stone-200 bg-white/90 backdrop-blur">
         <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-          <Logo />
+          <div className="flex items-center gap-4">
+            <Logo />
+            {user && (
+              <Link to="/" className="text-sm font-medium text-stone-600 hover:text-stone-900">
+                My Trips
+              </Link>
+            )}
+          </div>
           {user && (
             <div className="flex items-center gap-3">
               <span className="hidden text-sm text-stone-600 sm:inline">{user.display_name}</span>

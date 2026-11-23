@@ -7,7 +7,7 @@ import { Badge, Button, Card, ErrorBox, Input, Loading, Notice, PageHeader, Prog
 import { cx } from '../../lib/cx'
 import { useAction, useAsync } from '../../hooks/useAsync'
 import { useTrip } from '../../layouts/TripContext'
-import { CATEGORY_META, formatDuration, hoursSummary, usd } from '../../lib/format'
+import { CATEGORY_META, costLabel, formatDuration, hoursSummary } from '../../lib/format'
 
 const STEP = 5
 
@@ -153,7 +153,7 @@ function DestinationCard({
         <div className="min-w-0 flex-1">
           <h3 className={cx('font-semibold text-stone-900', pref.hard_no && 'line-through')}>{d.name}</h3>
           <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-xs text-stone-500">
-            <span>{meta.label}</span>·<span>{d.admission_cost_usd ? usd(d.admission_cost_usd) : 'Free'}</span>·<span>~{formatDuration(d.est_duration_min)}</span>
+            <span>{meta.label}</span>·<span>{costLabel(d.admission_cost_usd)}</span>·<span>~{formatDuration(d.est_duration_min)}</span>
           </div>
         </div>
         {d.requires_booking && <Badge tone="info">Book ahead</Badge>}

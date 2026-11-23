@@ -7,7 +7,7 @@ import { Badge, Card, EmptyState, ErrorBox, Loading, PageHeader, ProgressBar, Sp
 import { cx } from '../../lib/cx'
 import { useAction, useAsync } from '../../hooks/useAsync'
 import { useTrip } from '../../layouts/TripContext'
-import { CATEGORY_META, formatDuration, usd } from '../../lib/format'
+import { CATEGORY_META, costLabel, formatDuration } from '../../lib/format'
 
 export default function ComparePage() {
   const { trip, reload: reloadTrip } = useTrip()
@@ -144,7 +144,7 @@ function ChoiceCard({ d, hint, onClick, disabled }: { d: Destination; hint: stri
       </div>
       <h3 className="mt-3 text-lg font-bold text-stone-900">{d.name}</h3>
       <p className="text-xs text-stone-500">
-        {meta.label} · {d.admission_cost_usd ? usd(d.admission_cost_usd) : 'Free'} · ~{formatDuration(d.est_duration_min)}
+        {meta.label} · {costLabel(d.admission_cost_usd)} · ~{formatDuration(d.est_duration_min)}
       </p>
       {d.description && <p className="mt-2 line-clamp-3 text-sm text-stone-600">{d.description}</p>}
     </button>
